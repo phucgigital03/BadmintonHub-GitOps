@@ -1097,6 +1097,7 @@ curl -s <ALB-DNS>/api/actuator/health            # smoke = 200
 
 **B. Cửa sổ demo (5–10', người dùng thật):**
 - Mời người thật (hội đồng/tester) đăng nhập trên URL live: **đặt sân → thanh toán Bank QR → chat real-time**.
+  > ⚠️ **Chưa có domain (Day 1–7, http) — ở màn thanh toán hãy đọc/gõ tay số tài khoản, ĐỪNG bấm nút copy.** `navigator.clipboard` là secure-context-only nên trên http nó không copy gì, nhưng toast **vẫn báo "Đã copy số tài khoản"** (`PaymentScreen.tsx:53-56`) → khán giả paste ra rỗng. Hết ngay sau §Day 8, không cần sửa code.
 - **QUAY MÀN HÌNH / CHỤP** làm bằng chứng — cụm sẽ bị xoá, data không giữ.
 - (Tuỳ chọn) mở Grafana/ArgoCD cho khán giả thấy metrics + GitOps sync live.
 
@@ -1156,6 +1157,7 @@ cd terraform && terraform destroy
 | **NS propagation 1–48h** → mua domain sát ngày là canh bạc; ACM đứng `PENDING_VALIDATION` cho tới khi CNAME resolve | **Mua sớm (Day 3), gắn muộn (Day 8)** — hai việc tách rời, phần chuẩn bị không cần cụm. Mua tại Route53 để NS tự cấu hình (§Day 8 phần A) |
 | **Record Route53 TTL mặc định 300s** → rebuild ra ALB mới nhưng resolver còn cache 5 phút → URL chết đầu buổi demo | `external-dns.alpha.kubernetes.io/ttl: "60"` đặt sẵn trong template Ingress từ §Day 4 |
 | **`FRONTEND_URL` sai trong giai đoạn chưa có domain** (trỏ ALB buổi trước) | Chấp nhận: đã verify chỉ ảnh hưởng **link email verify/reset** (`EmailServiceImpl:37,71`); login email/password **không** gate theo `emailVerified` → luồng demo không bị chặn. §Day 8 set 1 lần là đúng vĩnh viễn |
+| **Nút copy số tài khoản im lặng không hoạt động khi demo trên http** → `navigator.clipboard` là **secure-context-only** nên `undefined` trên `http://k8s-...elb.amazonaws.com`; `?.` nuốt lỗi nhưng `toast.success('Đã copy số tài khoản')` **vẫn hiện** (`PaymentScreen.tsx:53-56`) → người dùng paste ra rỗng trong khi UI báo thành công. **Đây là lỗi duy nhất nhìn thấy được của giai đoạn không HTTPS, và nó nằm đúng trong luồng thanh toán được demo** | Day 1–7: **đọc/gõ tay số tài khoản, đừng bấm nút copy** (§7.3.B). §Day 8 bật HTTPS là tự khỏi — **không sửa một dòng code nào** |
 | **Secret khoá theo cụm** (SealedSecrets) → rebuild là secret thành rác | **External Secrets + SSM**: secret sống ngoài cụm (§4 · §Day 6 mục 4) |
 | **Sai tên file values** → CI xanh nhưng ArgoCD không deploy, không lỗi ở đâu | Một quy ước duy nhất `values/<svc>-<env>.yaml` dùng xuyên Day 2/4/5/6 (§Day 2 mục 2) |
 | Node thiếu RAM (staging+prod+obs ≈ 20–24 GB) | **t3.xlarge spot ×2** (32 GB) + 1 replica + `MaxRAMPercentage=75` + Kafka/PG single-node + **dev để local** |

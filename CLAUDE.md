@@ -5,6 +5,23 @@ Repo **desired-state (GitOps)** cho nền tảng BadmintonHub. **KHÔNG chứa s
 > Repo app (source Java/React, Dockerfile, Terraform, CI) = **`badmintonHub`** (folder sibling).
 > Kế hoạch đầy đủ + lộ trình 7 ngày (+ Day 8 gắn domain) + prompt paste-ready mỗi Day: xem **`Planning_CICD.md`**.
 
+## Rules Index
+
+Rule chi tiết nằm ở `.claude/rules/`. Hai file đầu **luôn đọc**; còn lại đọc khi động vào thư mục tương ứng.
+
+| File | Trigger | Covers |
+|---|---|---|
+| [`gitops-workflow.md`](.claude/rules/gitops-workflow.md) | **always** | 2 repo · Day→repo · 8 never-violate · hợp đồng tên values · promote · rollback · commit |
+| [`ephemeral-cost.md`](.claude/rules/ephemeral-cost.md) | **always** | Tiêu chí vàng 0 thao tác tay · runbook teardown §7.1 · PVC mồ côi · chi phí |
+| [`helm-chart.md`](.claude/rules/helm-chart.md) | `charts/**`, `values/**` | Chart generic cho cả 9 svc · probe liveness/readiness tách rời · graceful shutdown · không PDB |
+| [`values-env-map.md`](.claude/rules/values-env-map.md) | `values/*.yaml` | Bảng svc→port→datastore→probe · env→ConfigMap/Secret · DNS in-cluster · bẫy đã biết |
+| [`bitnami-datastores.md`](.claude/rules/bitnami-datastores.md) | `infra/**`, `values/infra*.yaml` | 5 override bắt buộc (Redis/Kafka/Mongo/RabbitMQ/PG) · registry `bitnamilegacy` |
+| [`argocd-appset.md`](.claude/rules/argocd-appset.md) | `apps/**` | ApplicationSet matrix · multi-source `$values` · labels · `CreateNamespace` · debug |
+| [`secrets-eso.md`](.claude/rules/secrets-eso.md) | `external-secrets/**` | ESO + SSM · vì sao không SealedSecrets · danh sách param · thứ tự bootstrap |
+| [`ingress-alb.md`](.claude/rules/ingress-alb.md) | `infra/**ingress**` | 2 công tắc host/cert · `group.name` · `idle_timeout` · TTL 60 · không cert-manager · FE same-origin |
+
+**Slash command** ở `.claude/commands/`: `/day <N>` · `/done-check <N>` · `/self-review` · `/debug` · `/helm-verify` · `/new-values <svc>` · `/promote <svc>` · `/demo-check` · `/teardown-check` · `/explain-manifest` · `/handoff`.
+
 ## 🎯 Nguyên tắc hàng đầu — Demo ephemeral 5–10 phút
 Cụm **chỉ sống đúng lúc demo**: `terraform apply` (~15') → **người dùng thật vào dùng 5–10 phút** (login → đặt sân → thanh toán → chat trên URL live) → `terraform destroy` (~10') → **bill ≈ vài xu/buổi**.
 - Mọi thứ **tái lập 100% bằng code** (Terraform + GitOps + image ở ECR + state ở S3 + **secret ở SSM**) → dựng lại nhanh, xoá sạch không tiếc.
@@ -89,3 +106,35 @@ external-secrets/   # Day 6 — ExternalSecret: CHỈ ref tên param SSM, không
 ## Cách làm việc ở repo này
 - Sửa values/chart/app → PR → merge → ArgoCD tự sync. KHÔNG chạy service Spring ở đây (không có code).
 - Việc = YAML / Helm / ArgoCD. Nguồn thiết kế + prompt paste-ready mỗi Day = **`Planning_CICD.md`**.
+
+---
+
+## Session Progress
+
+> Phần này được cập nhật tự động bằng lệnh `/handoff` cuối mỗi phiên làm việc.
+> Chỉ phản ánh **việc đang thực sự làm** ở repo này — kế hoạch chưa động tới thì để trong `Planning_CICD.md`.
+
+**Cập nhật lần cuối**: 2026-07-27 (dựng `.claude/` cho repo gitops: **8 rule** + **11 slash command** + Rules Index + mục Session Progress này. Rule adapt sang domain GitOps — không copy rule Java/Kafka/Redis từ repo app vì repo này không có source code.)
+
+### ✅ Đã hoàn thành
+- `CLAUDE.md` + `Planning_CICD.md` (Day 1→8, prompt paste-ready mỗi Day, runbook teardown/rebuild/demo §7).
+- `.claude/rules/` **8 file** + `.claude/commands/` **11 command** (xem §Rules Index).
+- Remote: `github.com/phucgigital03/BadmintonHub-GitOps`.
+
+### 🔄 Đang làm
+- *(chưa có — repo mới chỉ có doc + `.claude/`)*
+
+### 📋 Việc tiếp theo (theo thứ tự ưu tiên)
+1. **Day 1 — Containerize**: mở Claude Code ở **`../badmintonHub` (app repo)**, paste prompt §Day 1 của `Planning_CICD.md`. **Không làm ở repo này.**
+2. **Day 2 — Helm + kind** (repo NÀY): `charts/service/` + `values/<svc>-<env>.yaml` (9 × 3) + `values/infra.yaml`. Gõ `/day 2`.
+3. Day 3 (app repo) → Day 4 (repo này) → Day 5 (app repo) → Day 6 (repo này) → Day 7, 8 (cả 2).
+
+### 🧠 Quyết định kỹ thuật đã chốt
+- **1 chart `charts/service/` cho cả 9 service kể cả `frontend`** — điều kiện để ApplicationSet matrix của Day 6 dùng được.
+- **Secret = ESO + SSM, KHÔNG SealedSecrets** — keypair của SealedSecrets khoá theo cụm, mà cụm destroy mỗi buổi.
+- **HTTPS = ACM, KHÔNG cert-manager** — ALB chỉ nhận cert ACM/IAM, không đọc K8s Secret.
+- **Domain là add-on của Day 8**, Day 1–7 chạy http trên ALB DNS thô; Ingress template hoá sẵn 2 công tắc `host`/`certificateArn`.
+- **Probe tách `liveness`/`readiness`**, không dùng `/actuator/health` composite.
+
+### 💬 Claude đã làm trong phiên này
+Dựng `.claude/rules/` + `.claude/commands/` cho repo gitops theo cùng tổ chức với repo app: port `handoff.md`, `done-check.md`, `self-review.md`, `debug.md`, `explain-*.md` sang domain GitOps và thêm command đặc thù (`/day`, `/helm-verify`, `/new-values`, `/promote`, `/demo-check`, `/teardown-check`). Nội dung rule rút từ `Planning_CICD.md` (Day 2/4/6/7/8 + §7 runbook) nên không phải mở lại doc 1200 dòng mỗi phiên.
