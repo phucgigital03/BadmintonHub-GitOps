@@ -5,6 +5,7 @@ Repo **desired-state (GitOps)** cho nền tảng BadmintonHub. **KHÔNG chứa s
 > Repo app (source Java/React, Dockerfile, Terraform, CI) = **`badmintonHub`** (folder sibling).
 > Kế hoạch đầy đủ + lộ trình 7 ngày (+ Day 8 gắn domain) + prompt paste-ready mỗi Day: xem **`Planning_CICD.md`**.
 > Bức tranh tổng quát hệ thống (hạ tầng AWS · 1 ALB 2 namespace · secret/storage · vòng đời request & buổi demo): xem **[`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md)**.
+> Thao tác tay phải tự làm (AWS Console · GitHub · third-party API key · 22 SSM param) + bản đồ verify Console theo Day: xem **[`docs/MANUAL-SETUP.md`](docs/MANUAL-SETUP.md)**.
 
 ## Rules Index
 
@@ -62,6 +63,8 @@ infra/              # Day 2/4 — values Bitnami (Postgres/Redis/Kafka/Mongo/Rab
 apps/               # Day 6 — ArgoCD Application/ApplicationSet (app-of-apps: staging + prod)
 external-secrets/   # Day 6 — ExternalSecret: CHỈ ref tên param SSM, không chứa giá trị
 docs/               # Tài liệu — ARCHITECTURE.md: bức tranh tổng quát hệ thống (góc nhìn hạ tầng)
+                    #            MANUAL-SETUP.md: checklist thao tác tay (account/IAM/API key/SSM param/
+                    #            GitHub secret) + bản đồ verify AWS Console theo Day + verify bill về 0
 ```
 > Hiện repo **mới có `first commit`** (chỉ 2 doc này) — charts/apps **CHƯA dựng**. Đã có remote `github.com/phucgigital03/BadmintonHub-GitOps`.
 
