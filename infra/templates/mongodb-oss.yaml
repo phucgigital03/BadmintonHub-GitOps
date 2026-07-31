@@ -1,0 +1,83 @@
+{{- if .Values.mongodbOss.enabled }}
+{{- if .Values.mongodb.enabled }}
+{{- fail "mongodb.enabled và mongodbOss.enabled không được bật cùng lúc — hai bên cùng tạo Service tên 'mongodb'" }}
+{{- end }}
+# MongoDB chính chủ (multi-arch) — CHỈ cho kind trên máy arm64.
+# bitnamilegacy/mongodb chỉ có amd64 nên chart Bitnami không chạy được trên node arm64.
+# Bề mặt phải giống hệt chart Bitnami để app không biết sự khác biệt:
+#   Service `mongodb` : 27017 · root user ở db `admin` · cùng Secret datastore-secrets.
+apiVersion: v1
+kind: Service
+metadata:
+  name: mongodb
+  labels:
+    app.kubernetes.io/name: mongodb
+    app.kubernetes.io/component: mongodb-oss
+spec:
+  type: ClusterIP
+  ports:
+    - name: mongodb
+      port: 27017
+      targetPort: mongodb
+  selector:
+    app.kubernetes.io/name: mongodb
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: mongodb
+  labels:
+    app.kubernetes.io/name: mongodb
+    app.kubernetes.io/component: mongodb-oss
+spec:
+  serviceName: mongodb
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: mongodb
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: mongodb
+    spec:
+      containers:
+        - name: mongodb
+          image: {{ .Values.mongodbOss.image | quote }}
+          ports:
+            - name: mongodb
+              containerPort: 27017
+          env:
+            - name: MONGO_INITDB_ROOT_USERNAME
+              value: {{ .Values.mongodbOss.rootUser | quote }}
+            - name: MONGO_INITDB_ROOT_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.mongodbOss.existingSecret }}
+                  key: {{ .Values.mongodbOss.secretKey }}
+          # Không dùng mongosh có auth ở probe: chỉ cần biết cổng đã mở và server trả lời.
+          readinessProbe:
+            tcpSocket:
+              port: mongodb
+            initialDelaySeconds: 10
+            periodSeconds: 10
+          livenessProbe:
+            tcpSocket:
+              port: mongodb
+            initialDelaySeconds: 30
+            periodSeconds: 15
+          {{- with .Values.mongodbOss.resources }}
+          resources:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          volumeMounts:
+            - name: data
+              mountPath: /data/db
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        resources:
+          requests:
+            storage: {{ .Values.mongodbOss.storage }}
+{{- end }}

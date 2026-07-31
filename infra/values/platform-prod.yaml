@@ -1,0 +1,20 @@
+# prod trên EKS. App ns `prod`, data ns `data-prod`.
+appNamespace: prod
+dataNamespace: data-prod
+
+# ⚠️ Day 4 (chưa có domain): điền DNS thô của ALB, dạng
+#   http://k8s-badminton-xxxxxxxx-0000000000.ap-southeast-1.elb.amazonaws.com
+# Day 8 (có domain): đổi thành https://prod.badminton.<domain> — sửa MỘT lần là đúng vĩnh viễn.
+#
+# Đây là điểm KHÔNG tự lành sau `terraform destroy` → `apply`, vì ALB DNS đổi mỗi lần apply.
+# Với link email verify/reset thì lệch một buổi là chấp nhận được (login email/password không
+# gate theo emailVerified). Nhưng chat-service còn dùng chính biến này làm allowed-origin của
+# WS handshake → phải xác minh ở Day 4 xem WebSocketConfig có nhận được
+# setAllowedOriginPatterns("*") không; nếu không thì đây là thao tác tay duy nhất còn sót lại
+# của tiêu chí "rebuild 0 thao tác tay", phải xử lý trước khi demo.
+frontendUrl: "http://REPLACE-WITH-ALB-DNS"
+
+# prod profile: bật CloudinaryProdGuard → payment-service và chat-service BẮT BUỘC có
+# CLOUDINARY_CLOUD_NAME/API_KEY/API_SECRET, thiếu là fail boot. Đây là by design —
+# nạp param vào SSM, đừng "sửa" bằng cách bỏ profile.
+springProfilesActive: prod

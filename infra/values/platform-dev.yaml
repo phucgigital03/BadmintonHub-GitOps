@@ -1,0 +1,15 @@
+# dev = kind. App ns `dev`, data ns `data-dev`.
+appNamespace: dev
+dataNamespace: data-dev
+
+# Truy cập qua `kubectl -n dev port-forward svc/frontend 8081:80`.
+# Giá trị này phải khớp ĐÚNG origin trình duyệt đang mở: chat-service nạp nó vào
+# app.frontend-url và WebSocketConfig.setAllowedOrigins() dùng để validate Origin của WS
+# handshake — sai thì chat chết trong khi mọi luồng khác vẫn xanh (rất khó truy).
+frontendUrl: http://localhost:8081
+
+# Cố ý ĐỂ RỖNG ở dev (không bật profile prod).
+# CloudinaryProdGuard chỉ active với @Profile("prod") và sẽ chặn boot payment-service +
+# chat-service nếu thiếu CLOUDINARY_*. Không bật prod ở kind → CloudinaryService degrade về
+# URL placeholder, e2e chạy được mà không cần API key thật.
+springProfilesActive: ""

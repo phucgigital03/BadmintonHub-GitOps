@@ -1,0 +1,54 @@
+# dev = kind local, namespace data-dev. Ngân sách RAM rất chật (máy 8 GB, Docker ~6 GB) nên
+# mọi datastore bị ép nhỏ hết mức còn chạy được. Đây là env DUY NHẤT ép tay như vậy.
+
+# 🔴 Đảo Mongo sang image chính chủ: node kind là arm64, mà bitnamilegacy/mongodb chỉ có amd64.
+mongodb:
+  enabled: false
+mongodbOss:
+  enabled: true
+  storage: 1Gi
+
+postgresql:
+  primary:
+    persistence:
+      size: 1Gi
+    resources:
+      requests:
+        memory: 128Mi
+        cpu: 50m
+      limits:
+        memory: 384Mi
+
+redis:
+  master:
+    persistence:
+      size: 1Gi
+    resources:
+      requests:
+        memory: 64Mi
+        cpu: 25m
+      limits:
+        memory: 192Mi
+
+kafka:
+  controller:
+    # Mặc định là MaxRAMPercentage=75 — với limit 1Gi thì JVM lấy 768Mi. Ghim cứng cho dễ đoán.
+    heapOpts: "-Xmx512m -Xms512m"
+    persistence:
+      size: 1Gi
+    resources:
+      requests:
+        memory: 640Mi
+        cpu: 100m
+      limits:
+        memory: 896Mi
+
+rabbitmq:
+  persistence:
+    size: 1Gi
+  resources:
+    requests:
+      memory: 160Mi
+      cpu: 50m
+    limits:
+      memory: 384Mi

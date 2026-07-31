@@ -1,0 +1,54 @@
+# staging = namespace data-staging trên EKS (node amd64) → dùng chart Bitnami cho CẢ 5 datastore,
+# kể cả MongoDB (chỉ kind arm64 mới phải đảo sang image chính chủ).
+#
+# ⚠️ PVC ở đây tạo EBS volume THẬT và tính tiền kể cả khi pod đã tắt. Runbook teardown §7.1
+# bắt buộc `kubectl delete pvc --all -n data-staging` KHI CỤM CÒN SỐNG — reclaim policy Delete
+# chỉ chạy lúc PVC bị xoá, destroy thẳng cụm thì không ai gọi nó và volume mồ côi vẫn chảy tiền.
+
+mongodb:
+  enabled: true
+mongodbOss:
+  enabled: false
+
+postgresql:
+  primary:
+    persistence:
+      size: 8Gi
+    resources:
+      requests:
+        memory: 256Mi
+        cpu: 100m
+      limits:
+        memory: 1Gi
+
+redis:
+  master:
+    persistence:
+      size: 4Gi
+    resources:
+      requests:
+        memory: 128Mi
+        cpu: 50m
+      limits:
+        memory: 512Mi
+
+kafka:
+  controller:
+    persistence:
+      size: 8Gi
+    resources:
+      requests:
+        memory: 768Mi
+        cpu: 200m
+      limits:
+        memory: 1536Mi
+
+rabbitmq:
+  persistence:
+    size: 4Gi
+  resources:
+    requests:
+      memory: 256Mi
+      cpu: 100m
+    limits:
+      memory: 768Mi

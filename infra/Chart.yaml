@@ -1,0 +1,40 @@
+apiVersion: v2
+name: infra
+description: Umbrella chart 5 datastore Bitnami cho namespace data-<env>
+type: application
+version: 0.1.0
+
+# ⚠️ VERSION ĐƯỢC GHIM CÓ CHỦ ĐÍCH — đừng nâng nếu chưa kiểm lại 2 việc:
+#   1. tag image mặc định của version mới CÓ tồn tại trong docker.io/bitnamilegacy hay không
+#      (từ 28/8/2025 catalog free chuyển sang bitnamilegacy; chart mới nhất đã trỏ tag "latest"
+#       của Bitnami Secure Images → vừa không pin được, vừa 404 với tài khoản free)
+#   2. tên value còn đúng không — key sai bị Helm bỏ qua TRONG IM LẶNG.
+#      Đã dính thật: kafka chart 32.x KHÔNG còn `sasl.enabled` và `autoCreateTopicsEnable`.
+#
+# Tag mặc định của các version dưới đây (đã verify có trong bitnamilegacy):
+#   postgresql 16.7.27 -> 17.6.0-debian-12-r4   (amd64+arm64)
+#   redis      21.2.13 -> 8.0.3-debian-12-r1    (amd64+arm64)
+#   kafka      32.4.3  -> 4.0.0-debian-12-r10   (amd64+arm64)
+#   mongodb    16.5.45 -> 8.0.13-debian-12-r0   (⚠️ amd64 ONLY — xem mongodbOss ở values.yaml)
+#   rabbitmq   16.0.14 -> 4.1.3-debian-12-r1    (amd64+arm64)
+dependencies:
+  - name: postgresql
+    version: 16.7.27
+    repository: https://charts.bitnami.com/bitnami
+    condition: postgresql.enabled
+  - name: redis
+    version: 21.2.13
+    repository: https://charts.bitnami.com/bitnami
+    condition: redis.enabled
+  - name: kafka
+    version: 32.4.3
+    repository: https://charts.bitnami.com/bitnami
+    condition: kafka.enabled
+  - name: mongodb
+    version: 16.5.45
+    repository: https://charts.bitnami.com/bitnami
+    condition: mongodb.enabled
+  - name: rabbitmq
+    version: 16.0.14
+    repository: https://charts.bitnami.com/bitnami
+    condition: rabbitmq.enabled
