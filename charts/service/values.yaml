@@ -27,9 +27,21 @@ strategy: RollingUpdate
 
 port: 8080
 
-# PATH ĐẦY ĐỦ — chart không tự nối chuỗi. Java: /actuator/health/liveness · frontend nginx: /
-livenessPath: /actuator/health/liveness
-readinessPath: /actuator/health/readiness
+# PATH ĐẦY ĐỦ — chart không tự nối chuỗi.
+#
+# 🔴 KHÔNG dùng /actuator/health/{liveness,readiness}. Đã đo trên kind: SecurityConfig của app
+# chỉ permitAll đúng 2 path LITERAL là /actuator/health và /actuator/info, nên mọi sub-path trả
+# 403 (không phải 404 — /actuator/bat-ky-cai-gi cũng 403) và pod KHÔNG BAO GIỜ Ready.
+# Đúng với cả 7 service Java có Spring Security; eureka-server thoát vì không có security.
+#
+# Cách thay thế giữ nguyên tinh thần "đừng restart pod vì datastore nhấp nháy":
+#   liveness  = /actuator/info   không chạm db/redis/mongo/eureka → chỉ fail khi JVM chết/treo
+#   readiness = /actuator/health composite. Dùng composite cho READINESS là AN TOÀN: Redis chết
+#               thì pod bị rút khỏi Endpoints chứ KHÔNG bị restart, nên không có cascade.
+# (Muốn dùng đúng nhóm liveness/readiness của Spring Boot thì phải permit /actuator/health/**
+#  trong SecurityConfig ở repo app rồi build lại 8 image — xem TODO trong CLAUDE.md.)
+livenessPath: /actuator/info
+readinessPath: /actuator/health
 
 # 60 × 5s = 300s cho JVM boot. Đo thật ở Day 1 (docker-compose.app.yml): một Spring web context
 # mất 128s để khởi tạo trên máy 8GB, và compose phải đặt start_period: 300s.

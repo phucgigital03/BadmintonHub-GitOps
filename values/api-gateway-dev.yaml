@@ -21,9 +21,9 @@ image:
 strategy: Recreate
 
 port: 3000
-livenessPath: /actuator/health/liveness
-readinessPath: /actuator/health/readiness
-startupFailureThreshold: 60
+livenessPath: /actuator/info
+readinessPath: /actuator/health
+startupFailureThreshold: 180
 
 envFrom:
   configMap: app-config

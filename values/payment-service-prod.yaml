@@ -21,8 +21,8 @@ image:
 strategy: RollingUpdate
 
 port: 3006
-livenessPath: /actuator/health/liveness
-readinessPath: /actuator/health/readiness
+livenessPath: /actuator/info
+readinessPath: /actuator/health
 startupFailureThreshold: 60
 
 envFrom:
