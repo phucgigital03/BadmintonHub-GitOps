@@ -16,6 +16,10 @@ auth.enabled: false          # app KHÔNG có chỗ nhập password
 architecture: standalone     # → Service tên redis-master
 ```
 Đã kiểm `api-gateway`, `user`, `court`, `booking`, `payment`, `chat`: chỉ khai `spring.data.redis.host` + `port`, **không có field `password`** → auth bật = mọi lệnh trả `NOAUTH`. Nặng hơn: gateway có `default-filters: RequestRateLimiter` áp cho **mọi route** → **toàn bộ request 500**, không phải mất một tính năng.
+
+> ✅ Đã xác nhận trên kind bằng traffic thật: gọi dồn thì gateway trả **429**, tức rate-limiter đọc/ghi Redis bình thường. Có **2 tầng** rate-limit, đều dùng Redis, key khác nhau:
+> `request_rate_limiter.{ip:<ip>}.tokens|.timestamp` (gateway) và `rate_limit:register:<ip>` (user-service).
+> Khi chạy e2e lặp lại trên kind mà bị 429, xả bằng `redis-cli del` đúng 3 key đó — **chỉ làm ở kind**, đừng đụng vào staging/prod.
 *(Muốn giữ auth: nạp env `SPRING_DATA_REDIS_PASSWORD` từ Secret — relaxed binding của Spring Boot nhận, vẫn 0 đổi code.)*
 
 ## ⚠️ Kafka — SASL + auto-create topic

@@ -87,14 +87,21 @@ echo "── Bổ sung · heap không chiếm hết limit (chống OOMKilled) �
 # Boot cần ~150-200Mi ⇒ OOMKilled. values dev hạ xuống 55%.
 if have user-service; then
   # Retry: ngay sau check B1 thì thread pool còn đang tắc, lệnh java hay không trả lời.
+  # ⚠️ Phải khớp CHÍNH XÁC "MaxHeapSize" — /MaxHeapSize/ còn khớp cả SoftMaxHeapSize nên
+  # trả 2 dòng và mọi phép so sánh số sau đó đều lỗi "integer expression expected".
   for i in 1 2 3 4 5; do
     h=$(kubectl -n $NS exec deploy/user-service -- bash -c \
-          'java -XX:+PrintFlagsFinal -version 2>/dev/null | awk "/MaxHeapSize/ {print int(\$4/1024/1024)}"' 2>/dev/null | tr -d '\r')
+          'java -XX:+PrintFlagsFinal -version 2>/dev/null | awk "\$2==\"MaxHeapSize\" {print int(\$4/1024/1024); exit}"' 2>/dev/null | tr -d '\r')
     [ -n "$h" ] && break; sleep 10
   done
   lim=$(kubectl -n $NS get deploy user-service -o jsonpath='{.spec.template.spec.containers[0].resources.limits.memory}')
-  echo "     MaxHeapSize=${h}MB · limit=$lim"
-  [ "${h:-999}" -le 280 ] && ok "heap chừa đủ chỗ cho non-heap" || no "heap ${h}MB quá sát limit $lim"
+  limmb=${lim%Mi}
+  # Ngưỡng theo TỈ LỆ chứ không phải số tuyệt đối: non-heap của Spring Boot cần ~150-200Mi,
+  # nên heap không nên vượt ~60% limit.
+  cap=$(( limmb * 60 / 100 ))
+  echo "     MaxHeapSize=${h}MB · limit=${limmb}Mi · trần cho phép ${cap}MB"
+  if [ -n "$h" ] && [ "$h" -le "$cap" ]; then ok "heap chừa đủ chỗ cho non-heap"
+  else no "heap ${h:-?}MB vượt trần ${cap}MB của limit ${lim}"; fi
 else sk "user-service chưa deploy"; fi
 
 echo

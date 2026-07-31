@@ -144,10 +144,13 @@ Day 6 ArgoCD đặt release name = `<svc>-<env>` (vd `user-service-staging`). N�
 - `helm lint` xanh 27/27; `helm template` render đúng cho cả 3 env.
 - Trên kind: **5/5 datastore Running**, Redis trả `PONG` (không NOAUTH), Postgres có đủ 5 DB, RabbitMQ mở `stomp:61613` + plugin `rabbitmq_stomp` bật.
 
-- **Trên kind, đã chạy thật**: cả **9/9 service đều Ready được**; `scripts/kind-verify.sh` **13/14 xanh**; e2e qua `api-gateway`: `register` 201 · `login` trả JWT · `/api/clubs` 200 (có seed data) · `/api/clubs/{id}/courts` 200 · `/api/bookings` 200 · Kafka consumer connected · Eureka nhận đủ đăng ký.
+- **Trên kind, đã chạy thật**: cả **9/9 service đều Ready được** (chart + values + wiring đúng cho cả 9).
+- **e2e đường ghi ĐÃ KHÉP VÒNG** qua `api-gateway`: `register` 201 → lấy token verify từ log (`SENDGRID_API_KEY` rỗng nên `EmailServiceImpl` log ra console) → `verify-email` 200 → login lại có `email_verified=true` → **`POST /api/bookings` 201** (`status=PENDING`, `holdExpiresAt` = createdAt + **10 phút**, khớp `BOOKING_HOLD_MINUTES` trong `app-config`) → slot chuyển **`RESERVED`** đúng `bookingId`.
+  ⇒ Chứng minh trọn vòng Kafka: booking-service produce `booking.slot.changed` → court-service consume → cập nhật `court_db`. Và **15 topic tự sinh** (`booking.slot.changed`, `payment.proof.submitted`, `payment.host.confirmed`, … + `.DLT`) dù code **không có bean `NewTopic`** nào ⇒ bẫy A7 đã đóng bằng traffic thật, không phải chỉ đọc config.
+- Gateway trả **429** khi gọi dồn ⇒ `RequestRateLimiter` + Redis hoạt động. Có **2 tầng** rate-limit: của gateway (`request_rate_limiter.{ip:…}`) và của user-service (`rate_limit:register:<ip>`).
 
 ### 🔄 Đang làm
-- Đóng nốt Day 2: e2e phần `thanh toán → chat` (cần lượt 2 vì máy chỉ gánh ~6 service cùng lúc).
+- Day 2 coi như xong. Còn tuỳ chọn: e2e phần `thanh toán` (`payment-service`) — nó đã **Ready** rồi, chỉ chưa chạy luồng nghiệp vụ vì máy không gánh nổi 7 JVM cùng lúc.
 
 ### 📋 Việc tiếp theo (theo thứ tự ưu tiên)
 1. **Đóng nốt Day 2**: e2e trên kind + 4 check bẫy P0.

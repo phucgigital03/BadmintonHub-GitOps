@@ -54,6 +54,28 @@ Prod: thay `staging`→`prod`, `data-staging`→`data-prod`.
 
 `JWT_ACCESS_EXPIRATION_MS` · `JWT_REFRESH_EXPIRATION_MS` · `SENDGRID_FROM_EMAIL` · `SENDGRID_FROM_NAME` · `BOOKING_HOLD_MINUTES` · `BOOKING_MAX_HOLD_MINUTES` · `PAYMENT_EXPIRE_MINUTES` · `GOOGLE_CLIENT_ID` / `GOOGLE_CLIENT_SECRET`. Tất cả đã nằm trong `app-config` (trừ 2 biến Google là Secret).
 
+## 🔴 Đặt sân YÊU CẦU email đã verify — ảnh hưởng trực tiếp buổi demo
+
+`BookingController.create` khai:
+
+```java
+@PreAuthorize("hasAnyRole('USER','COACH','STAFF','ADMIN') and hasAuthority('EMAIL_VERIFIED')")
+```
+
+Tài liệu cũ ghi "login email/password không gate theo `emailVerified`" — **đúng với login, nhưng sai nếu hiểu là cả luồng demo không cần verify**. Người dùng mới đăng ký sẽ **403 `FORBIDDEN`** ngay ở bước đặt sân, tức chết đúng giữa buổi demo.
+
+Đường verify: `user-service` gửi mail chứa link `${FRONTEND_URL}/verify-email?token=<uuid>` → FE gọi `GET /api/auth/verify-email?token=...`.
+
+**Hệ quả phải xử lý trước demo** (chọn 1):
+
+| Cách | Đánh đổi |
+|---|---|
+| `SENDGRID_API_KEY` **thật** trong SSM | mail gửi được → luồng tự nhiên, nhưng người xem phải mở hộp thư |
+| Seed sẵn 1-2 tài khoản đã verify | không phụ thuộc mail, nhưng phải có bước seed sau mỗi rebuild (đụng tiêu chí 0 thao tác tay) |
+| Người xem dùng tài khoản demo dựng sẵn | đơn giản nhất cho buổi 5–10 phút |
+
+Khi `SENDGRID_API_KEY` rỗng, `EmailServiceImpl` **log link ra console** thay vì gửi (`[DEV] Email verify link for <email>: ...`) — tiện cho kind, vô dụng cho người dùng thật.
+
 ## Bẫy đã biết
 
 - **1 PostgreSQL / 5 DB** (compose local chạy 9 PG riêng — ở K8s gộp 1 instance). Mỗi service trỏ full-URL `DB_<SVC>_URL` → **0 đổi code**. `initdbScripts` tạo: `user_db, court_db, booking_db, payment_db, escrow_db`. (escrow **không** Redis · chat **không** Postgres, chỉ Mongo.)
