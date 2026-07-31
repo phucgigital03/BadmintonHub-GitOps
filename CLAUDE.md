@@ -72,6 +72,8 @@ external-secrets/   # Day 6 — ExternalSecret: CHỈ ref tên param SSM, không
 docs/               # Tài liệu — ARCHITECTURE.md: bức tranh tổng quát hệ thống (góc nhìn hạ tầng)
                     #            MANUAL-SETUP.md: checklist thao tác tay (account/IAM/API key/SSM param/
                     #            GitHub secret) + bản đồ verify AWS Console theo Day + verify bill về 0
+                    #            DAY2-EXPLAINED.md: giải thích Day 2 cho NGƯỜI MỚI — 13 phát hiện khi
+                    #            chạy thật (nhóm theo loại sai lầm) + khái niệm K8s/Helm cần học + tự kiểm tra
 ```
 Remote: `github.com/phucgigital03/BadmintonHub-GitOps`.
 
