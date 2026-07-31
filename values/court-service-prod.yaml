@@ -1,0 +1,36 @@
+# court-service — prod
+# Postgres court_db + Redis + Kafka.
+#
+# Tên file KHÔNG được đổi: values/<svc>-<env>.yaml là hợp đồng với CI (bump image.tag)
+# và với ApplicationSet của Day 6. Đặt sai tên = CI vẫn xanh, commit vẫn vào repo,
+# ArgoCD không đọc → không deploy gì và không báo lỗi ở đâu.
+
+# nameOverride quyết định TÊN Service. Phải đúng chữ: EUREKA_URL, nginx proxy của FE
+# và Ingress backend đều gọi theo tên này.
+nameOverride: court-service
+
+image:
+  repository: <ACCOUNT_ID>.dkr.ecr.ap-southeast-1.amazonaws.com/court-service
+  # TODO(Day 4): thay <ACCOUNT_ID> bằng account thật và tag bằng git SHA đã build.
+  # ECR chưa tồn tại đến Day 3 nên Day 2 để placeholder. PHẢI điền xong TRƯỚC khi
+  # cài ArgoCD ở Day 6, vì ApplicationSet sinh app prod ngay từ đầu.
+  tag: PLACEHOLDER-DAY4
+  pullPolicy: IfNotPresent
+
+strategy: RollingUpdate
+
+port: 3002
+livenessPath: /actuator/health/liveness
+readinessPath: /actuator/health/readiness
+startupFailureThreshold: 60
+
+envFrom:
+  configMap: app-config
+  secret: app-secrets
+
+resources:
+  requests:
+    memory: 128Mi
+    cpu: 100m
+  limits:
+    memory: 768Mi

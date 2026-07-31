@@ -1,0 +1,37 @@
+# frontend — dev
+# nginx phục vụ bundle Vite, proxy /api + /ws sang api-gateway.
+# Không envFrom: không có actuator, không đọc env Eureka/DB. Probe = / chứ không phải /actuator/*. FE same-origin nên 1 image dùng cho mọi env.
+#
+# Tên file KHÔNG được đổi: values/<svc>-<env>.yaml là hợp đồng với CI (bump image.tag)
+# và với ApplicationSet của Day 6. Đặt sai tên = CI vẫn xanh, commit vẫn vào repo,
+# ArgoCD không đọc → không deploy gì và không báo lỗi ở đâu.
+
+# nameOverride quyết định TÊN Service. Phải đúng chữ: EUREKA_URL, nginx proxy của FE
+# và Ingress backend đều gọi theo tên này.
+nameOverride: frontend
+
+image:
+  repository: badmintonhub/frontend
+  # image nạp vào node bằng `kind load docker-image`, không có trên registry nào
+  tag: dev
+  pullPolicy: IfNotPresent
+
+# Recreate ở dev: RollingUpdate với 1 replica bắt pod cũ sống tới khi pod mới Ready
+# → 2 JVM cùng chạy đúng lúc pod mới cần CPU nhất. Máy kind không gánh nổi.
+strategy: Recreate
+
+port: 80
+livenessPath: /
+readinessPath: /
+startupFailureThreshold: 6
+
+envFrom:
+  configMap: ""
+  secret: ""
+
+resources:
+  requests:
+    memory: 32Mi
+    cpu: 10m
+  limits:
+    memory: 64Mi

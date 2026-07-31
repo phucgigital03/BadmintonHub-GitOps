@@ -1,0 +1,37 @@
+# frontend — prod
+# nginx phục vụ bundle Vite, proxy /api + /ws sang api-gateway.
+# Không envFrom: không có actuator, không đọc env Eureka/DB. Probe = / chứ không phải /actuator/*. FE same-origin nên 1 image dùng cho mọi env.
+#
+# Tên file KHÔNG được đổi: values/<svc>-<env>.yaml là hợp đồng với CI (bump image.tag)
+# và với ApplicationSet của Day 6. Đặt sai tên = CI vẫn xanh, commit vẫn vào repo,
+# ArgoCD không đọc → không deploy gì và không báo lỗi ở đâu.
+
+# nameOverride quyết định TÊN Service. Phải đúng chữ: EUREKA_URL, nginx proxy của FE
+# và Ingress backend đều gọi theo tên này.
+nameOverride: frontend
+
+image:
+  repository: <ACCOUNT_ID>.dkr.ecr.ap-southeast-1.amazonaws.com/frontend
+  # TODO(Day 4): thay <ACCOUNT_ID> bằng account thật và tag bằng git SHA đã build.
+  # ECR chưa tồn tại đến Day 3 nên Day 2 để placeholder. PHẢI điền xong TRƯỚC khi
+  # cài ArgoCD ở Day 6, vì ApplicationSet sinh app prod ngay từ đầu.
+  tag: PLACEHOLDER-DAY4
+  pullPolicy: IfNotPresent
+
+strategy: RollingUpdate
+
+port: 80
+livenessPath: /
+readinessPath: /
+startupFailureThreshold: 6
+
+envFrom:
+  configMap: ""
+  secret: ""
+
+resources:
+  requests:
+    memory: 32Mi
+    cpu: 10m
+  limits:
+    memory: 64Mi

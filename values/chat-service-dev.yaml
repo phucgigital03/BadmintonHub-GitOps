@@ -1,0 +1,37 @@
+# chat-service — dev
+# MongoDB + Redis + RabbitMQ STOMP relay :61613 + Cloudinary.
+# KHÔNG có Postgres (đã exclude DataSourceAutoConfiguration). MONGODB_CHAT_URI phải kèm ?authSource=admin.
+#
+# Tên file KHÔNG được đổi: values/<svc>-<env>.yaml là hợp đồng với CI (bump image.tag)
+# và với ApplicationSet của Day 6. Đặt sai tên = CI vẫn xanh, commit vẫn vào repo,
+# ArgoCD không đọc → không deploy gì và không báo lỗi ở đâu.
+
+# nameOverride quyết định TÊN Service. Phải đúng chữ: EUREKA_URL, nginx proxy của FE
+# và Ingress backend đều gọi theo tên này.
+nameOverride: chat-service
+
+image:
+  repository: badmintonhub/chat-service
+  # image nạp vào node bằng `kind load docker-image`, không có trên registry nào
+  tag: dev
+  pullPolicy: IfNotPresent
+
+# Recreate ở dev: RollingUpdate với 1 replica bắt pod cũ sống tới khi pod mới Ready
+# → 2 JVM cùng chạy đúng lúc pod mới cần CPU nhất. Máy kind không gánh nổi.
+strategy: Recreate
+
+port: 3011
+livenessPath: /actuator/health/liveness
+readinessPath: /actuator/health/readiness
+startupFailureThreshold: 60
+
+envFrom:
+  configMap: app-config
+  secret: app-secrets
+
+resources:
+  requests:
+    memory: 128Mi
+    cpu: 100m
+  limits:
+    memory: 448Mi
