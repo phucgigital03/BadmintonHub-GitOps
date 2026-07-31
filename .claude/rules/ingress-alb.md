@@ -66,7 +66,14 @@ const WS_URL = import.meta.env.VITE_CHAT_WS_URL
 ```
 Hệ quả: ALB DNS đổi sau mỗi `apply` **không cần build lại FE, không cần sửa ConfigMap** · CORS thành same-origin · **và hôm bật HTTPS ở Day 8, FE tự chuyển `ws://`→`wss://`** (bake cứng `ws://` thì chat chết vì mixed content, phát hiện đúng lúc T-2).
 
-⚠️ `FRONTEND_URL` sau same-origin **không còn là CORS origin**, chỉ còn dùng cho link email verify/reset (`user-service` `EmailServiceImpl`). Chưa có domain thì link trỏ ALB buổi trước — **chấp nhận được**, đã verify login email/password không gate theo `emailVerified`. Day 8 set 1 lần là đúng vĩnh viễn.
+⚠️ `FRONTEND_URL` sau same-origin **không còn là CORS origin của gateway**, nhưng **vẫn còn 2 chỗ dùng** — đừng coi nó là biến vô hại:
+
+1. **link email verify/reset** (`user-service` `EmailServiceImpl`). Chưa có domain thì link trỏ ALB buổi trước — **chấp nhận được**, đã verify login email/password không gate theo `emailVerified`.
+2. 🔴 **allowed-origin của WebSocket handshake** (`chat-service`: `app.frontend-url` → `WebSocketConfig.setAllowedOrigins(...)`). Sai giá trị = **chat chết trong khi mọi luồng khác vẫn xanh**, rất khó truy ra.
+
+Chỗ (2) **đe doạ trực tiếp tiêu chí vàng "0 thao tác tay"**: ALB DNS đổi sau mỗi `apply`, nên nếu `setAllowedOrigins` không nhận wildcard thì mỗi buổi demo lại phải sửa ConfigMap. **Việc của Day 4**: đọc `chat-service/.../WebSocketConfig.java`, xem đổi được sang `setAllowedOriginPatterns("*")` không (đây là thứ Spring hỗ trợ cho trường hợp origin động). Nếu không đổi được thì phải chấp nhận 1 bước sửa values sau mỗi `apply` — và phải biết trước, đừng phát hiện lúc T-2.
+
+Day 8 có domain thì set 1 lần là đúng vĩnh viễn, cả (1) lẫn (2).
 
 ## Check
 

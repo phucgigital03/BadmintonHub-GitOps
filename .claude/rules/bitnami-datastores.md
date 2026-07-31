@@ -20,14 +20,29 @@ architecture: standalone     # → Service tên redis-master
 
 ## ⚠️ Kafka — SASL + auto-create topic
 
+> 🔴 **Key đã đổi ở chart 32.x** (bản đang ghim). `sasl.enabled` và `autoCreateTopicsEnable`
+> **không còn tồn tại**. Helm **bỏ qua key sai trong im lặng** nên viết theo bản cũ thì
+> `helm template` vẫn xanh, deploy vẫn lên, và bạn chỉ phát hiện lúc client không kết nối được.
+
 ```yaml
-controller.replicaCount: 1
-listeners.client.protocol: PLAINTEXT
-sasl.enabled: false                        # chart mới mặc định SASL_PLAINTEXT, client chỉ có bootstrap-servers
-offsets.topic.replicationFactor: 1
-transaction.state.log.replicationFactor: 1
-autoCreateTopicsEnable: true               # ⚠️ BẮT BUỘC
+# Tắt SASL = đặt protocol của CẢ BA listener, không có công tắc sasl.enabled nữa
+listeners:
+  client:      { protocol: PLAINTEXT }
+  controller:  { protocol: PLAINTEXT }
+  interbroker: { protocol: PLAINTEXT }
+controller:
+  replicaCount: 1
+  # thay cho autoCreateTopicsEnable + *.replicationFactor của chart cũ
+  overrideConfiguration:
+    auto.create.topics.enable: "true"      # ⚠️ BẮT BUỘC
+    offsets.topic.replication.factor: "1"
+    transaction.state.log.replication.factor: "1"
+    transaction.state.log.min.isr: "1"
+    default.replication.factor: "1"
+    min.insync.replicas: "1"
 ```
+
+Verify đã ăn: `helm template ... | grep -E 'auto.create.topics.enable|security.protocol.map'` phải thấy `auto.create.topics.enable=true` và `CONTROLLER:PLAINTEXT,CLIENT:PLAINTEXT,INTERNAL:PLAINTEXT`.
 Code publish/consume **~17 topic theo tên ở runtime** (`booking.slot.changed`, `payment.proof.submitted`, `payment.host.confirmed`, `payment.refund.queued`, `escrow.host.reimbursed`, …) và **không có bean `NewTopic`** nào. `docker-compose.yml` local có `KAFKA_AUTO_CREATE_TOPICS_ENABLE: true` nên bẫy này không lộ ra khi dev. Không bật → consumer treo / producer `UNKNOWN_TOPIC_OR_PARTITION`, **im lặng**, triệu chứng duy nhất là "đặt sân xong slot không cập nhật".
 
 ## ⚠️ MongoDB — `authSource`
@@ -52,8 +67,22 @@ Dùng **`postgres`** (`auth.postgresPassword`) cho cả 5 DB: `ddl-auto=update` 
 ## ⚠️ Registry 2025→2026 — `bitnamilegacy`
 
 Từ 28/8/2025 ảnh free chuyển sang `bitnamilegacy`, nhiều tag `docker.io/bitnami/*` bị gỡ → chart mặc định có thể **pull 404**. Bắt buộc cho **cả 5**:
-- ghim chart version (`--version <x.y.z>`), **và**
-- override registry (`global.imageRegistry` + `image.repository: bitnamilegacy/<img>`), **hoặc** mirror ảnh vào ECR (hợp tinh thần reproducible hơn).
+- ghim chart version, **và**
+- override `<chart>.image.repository: bitnamilegacy/<img>`, **hoặc** mirror ảnh vào ECR.
+
+Hai cái bẫy đi kèm:
+
+- 🔴 **`global.security.allowInsecureImages: true` là BẮT BUỘC.** Chart Bitnami từ 2025 có bước verify image và sẽ **chặn render** với `Original containers have been substituted for unrecognized ones` ngay khi `repository` khác mặc định.
+- 🔴 **Chart mới nhất trỏ `tag: latest`** (Bitnami Secure Images) — vừa không ghim được, vừa 404 với tài khoản free. Chọn version có **tag tường minh**, rồi verify: `docker manifest inspect bitnamilegacy/<img>:<tag>`.
+
+**Version đang ghim ở `infra/Chart.yaml`** (đã verify tag có trong `bitnamilegacy`):
+`postgresql 16.7.27` · `redis 21.2.13` · `kafka 32.4.3` · `mongodb 16.5.45` · `rabbitmq 16.0.14`.
+
+## 🔴 MongoDB của Bitnami chỉ có amd64 — kind trên Apple Silicon KHÔNG chạy được
+
+Đã kiểm `bitnamilegacy/mongodb` các tag `8.0.13`, `8.0.4`, `7.0.14`, `latest`: **amd64 only**. Node kind trên máy dev arm64 sẽ cho pod chết với `exec format error` mà log không nhắc gì tới kiến trúc. 4 datastore còn lại đều multi-arch nên bẫy này chỉ dính Mongo.
+
+Cách xử ở repo này: `infra/templates/mongodb-oss.yaml` dựng Mongo bằng image chính chủ `mongo:8.0` (multi-arch), bật bằng `mongodbOss.enabled` và **chỉ dùng cho `dev`**. EKS là amd64 nên `staging`/`prod` vẫn dùng chart Bitnami. Hai đường cho ra **cùng** Service `mongodb:27017` + root user ở db `admin`, nên `MONGODB_CHAT_URI` (kể cả `?authSource=admin`) giống hệt nhau ở mọi env. Template có guard `fail` nếu bật cả hai.
 
 ## Check nhanh (làm trên kind, miễn phí — đừng để lộ ra trên EKS)
 

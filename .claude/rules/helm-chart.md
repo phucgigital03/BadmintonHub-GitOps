@@ -20,7 +20,31 @@ globs: charts/**/*.yaml, charts/**/*.tpl, values/*.yaml
 
 Template tối thiểu: `Deployment` + `Service` (ClusterIP) + `_helpers.tpl`. Ingress **không** nằm trong chart này (xem [`ingress-alb.md`](ingress-alb.md)).
 
-## ⚠️ Probe — KHÔNG dùng `/actuator/health` cho liveness
+## 🔴 Probe — Spring Security chặn `/actuator/health/**` (đo thật, Day 2)
+
+**Đây là thứ phải đọc trước tiên khi động vào probe.** Trên kind, `user-service`:
+
+```
+/actuator/health              → 200      SecurityConfig permitAll đúng path LITERAL này
+/actuator/info                → 200      idem
+/actuator/health/liveness     → 403      ⬅ probe của chart gọi cái này
+/actuator/bat-ky-cai-gi       → 403      ⬅ chứng minh là Security chặn, KHÔNG phải 404
+```
+
+`MANAGEMENT_ENDPOINT_HEALTH_PROBES_ENABLED=true` **đã tới container** — endpoint có tồn tại, chỉ là bị chặn ở tầng security. Hệ quả: **pod không bao giờ Ready**, và đúng với **cả 7 service Java có Spring Security** (`eureka-server` thoát vì không có security). Triệu chứng đánh lừa: `connection refused` lúc đang boot rồi `403` sau đó, dễ đọc nhầm thành "app chưa lên".
+
+**Cách đang dùng — 0 đổi code app, giữ nguyên tinh thần của rule:**
+
+| Probe | Path | Vì sao |
+|---|---|---|
+| liveness | **`/actuator/info`** | không chạm db/redis/mongo/eureka → chỉ fail khi JVM chết hoặc treo thật |
+| readiness | **`/actuator/health`** | composite. Dùng composite cho **readiness** là AN TOÀN: Redis chết thì pod bị rút khỏi Endpoints chứ **không bị restart** → không có cascade. |
+
+> Điểm cốt lõi của rule chưa bao giờ là "phải dùng endpoint `/liveness`", mà là **liveness không được phụ thuộc datastore**. `/actuator/info` thoả điều đó còn chặt hơn.
+
+**TODO (repo app, khi thuận tiện)**: thêm `/actuator/health/**` vào `permitAll` trong `SecurityConfig` (1 chỗ ở `common-security` là đủ cho cả 7), build lại 8 image, rồi đổi probe về đúng nhóm `liveness`/`readiness` của Spring Boot — nhóm đó lọc sẵn component không thiết yếu nên chính xác hơn composite.
+
+## ⚠️ Vì sao KHÔNG dùng `/actuator/health` cho liveness
 
 `/actuator/health` là **composite** gộp `db` + `redis` + `mongo` + `discoveryComposite` (Eureka). Redis hoặc Eureka nhấp nháy 3 nhịp → liveness fail → **K8s restart pod** → pod restart lại làm Redis/Eureka thêm tải → **cascade restart đúng giữa buổi demo**. Đây là anti-pattern K8s kinh điển, không phải chuyện "đủ cho demo".
 
@@ -30,15 +54,57 @@ Cách sửa tốn **0 dòng code, 0 dòng pom** — 1 biến env trong ConfigMap
 ```yaml
 startupProbe:                    # cho JVM thời gian boot, tránh liveness giết sớm
   httpGet: { path: {{ .Values.livenessPath }}, port: {{ .Values.port }} }
-  failureThreshold: 30
-  periodSeconds: 5               # tối đa 150s để boot
+  failureThreshold: 60           # 60×5s = 300s
+  periodSeconds: 5
+  timeoutSeconds: 5
 livenessProbe:
   httpGet: { path: {{ .Values.livenessPath }}, port: {{ .Values.port }} }
   periodSeconds: 10
+  failureThreshold: 3
+  timeoutSeconds: 5
 readinessProbe:
   httpGet: { path: {{ .Values.readinessPath }}, port: {{ .Values.port }} }
   periodSeconds: 10
+  failureThreshold: 3
+  timeoutSeconds: 5
 ```
+
+### 🔴 `timeoutSeconds` phải khai tường minh — mặc định là 1 giây
+
+Probe **timeout bị tính y hệt probe fail**. Actuator của Spring Boot dưới sức ép CPU/RAM thường trả lời chậm hơn 1s → K8s giết pod đang **khoẻ**, pod restart lại làm cụm thêm tải → đúng cái cascade mà việc tách liveness/readiness sinh ra để tránh.
+
+**Đã dính thật ở Day 2** (kind): `eureka-server` và `api-gateway` bị giết với
+`Liveness probe failed: context deadline exceeded (Client.Timeout exceeded while awaiting headers)` — chú ý là *timeout*, không phải *connection refused*, nên đừng đọc nhầm thành "app chưa lên".
+Không phải chuyện riêng của máy yếu: node EKS `t3.xlarge` cũng gánh staging + prod + observability.
+
+### `failureThreshold: 30` là quá ít cho JVM
+
+Day 1 đo thật (`docker-compose.app.yml`): một Spring web context mất **128s** để khởi tạo, và compose phải đặt `start_period: 300s`. Trên kind đo lại: `Root WebApplicationContext: initialization completed in 124696 ms`. 30×5s = 150s sẽ giết pod giữa lúc boot hợp lệ → dùng **60** (300s).
+
+### liveness `failureThreshold: 6`, readiness giữ `3`
+
+Liveness trả lời câu hỏi *"app còn sống không"*, không phải *"app có nhanh không"*. 6×10s = **60s** im lặng mới restart — vẫn bắt được treo thật (deadlock, JVM đứng) nhưng không giết pod chỉ vì một đợt GC dài hoặc lúc node đang bận boot service khác. Với `3` (30s) đã thấy pod bị restart oan ngay cả sau khi đã nới `timeoutSeconds`.
+Readiness thì **giữ nhạy**: rút pod chậm ra khỏi Service là đúng, và nó không giết pod.
+
+### Đọc đúng triệu chứng probe — 2 lỗi khác hẳn nhau
+
+| Message | Nghĩa | Sửa ở đâu |
+|---|---|---|
+| `connection refused` | cổng **chưa mở** — JVM còn đang boot | `startupFailureThreshold` (ngân sách boot) |
+| `context deadline exceeded (Client.Timeout ...)` | cổng đã mở nhưng **trả lời chậm** | `probeTimeoutSeconds` / `livenessFailureThreshold` |
+
+Đọc nhầm hai cái này là đi sai hướng cả buổi. Và để ý probe nào báo: `failed **startup** probe` khác hẳn `failed **liveness** probe`.
+
+### Nút thắt trên kind là CPU, không phải RAM
+
+Đo thật ở Day 2 (máy 8 CPU / Docker 5.78 GB): thả 4 service boot cùng lúc → CPU node **954-1298%** (trần 800%), trong khi RAM mới dùng **2.2/5.8 GB**. Mọi JVM chậm lại → không cái nào mở nổi cổng trong 300s → K8s giết pod đang boot **hợp lệ** → restart lại càng nặng thêm.
+
+Hai hệ quả đã đưa vào repo: `values/<svc>-dev.yaml` dùng `startupFailureThreshold: 180` (900s, so với 60 ở staging/prod), và `scripts/kind-deploy.sh` deploy **tuần tự nghiêm ngặt** — Spring boot xong thì gần như không ăn CPU, nên tuần tự là cách duy nhất hội tụ được. Đừng "tối ưu" bằng cách chạy song song cho nhanh.
+
+### `strategy: Recreate` cho posture 1 replica trên máy chật
+
+`RollingUpdate` + `replicaCount: 1` ⇒ `maxUnavailable=0` ⇒ pod **cũ** phải sống tới khi pod **mới** Ready ⇒ **hai JVM cùng chạy** đúng lúc pod mới cần CPU nhất để boot. Trên kind điều này làm rollout không bao giờ hội tụ.
+→ `dev`: `Recreate` (chấp nhận gián đoạn vài chục giây). `staging`/`prod`: giữ `RollingUpdate` để không gián đoạn trước mặt người dùng.
 
 **Bằng chứng đã tách đúng** (làm trên kind, miễn phí): `kubectl scale --replicas=0` Redis → `/actuator/health` trả **503** nhưng `/actuator/health/liveness` **vẫn 200** → pod **không** restart.
 

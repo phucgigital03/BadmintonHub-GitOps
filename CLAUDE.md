@@ -56,19 +56,28 @@ Cụm **chỉ sống đúng lúc demo**: `terraform apply` (~15') → **người
 
 ## Cấu trúc repo (dựng dần theo Day)
 ```
-charts/service/     # Day 2 — 1 Helm chart tái sử dụng cho CẢ 9 service kể cả frontend
-                    #          (Deployment + Service + probe + envFrom; generic: port/probePath/envFrom optional)
-values/             # Day 2 — values theo (service × env): <svc>-dev.yaml, <svc>-staging.yaml, <svc>-prod.yaml
-infra/              # Day 2/4 — values Bitnami (Postgres/Redis/Kafka/Mongo/RabbitMQ) + ingress
-                    #          ingress-<env>.yaml mang 2 CÔNG TẮC mặc định "": host + certificateArn
-                    #          rỗng = http/ALB DNS (Day 4–7) · điền = HTTPS/domain (Day 8). ĐỪNG hardcode Ingress.
+charts/service/     # Day 2 ✅ — 1 Helm chart tái sử dụng cho CẢ 9 service kể cả frontend
+                    #            (Deployment + Service + probe + envFrom optional; tên object lấy từ
+                    #             nameOverride, KHÔNG từ Release.Name — xem §Bẫy tên Service)
+charts/platform/    # Day 2 ✅ — object dùng chung 1 namespace app: ConfigMap app-config (Day 2),
+                    #            Ingress ALB (Day 4), ExternalSecret (Day 6)
+values/             # Day 2 ✅ — 27 file <svc>-<env>.yaml (9 svc × 3 env)
+infra/              # Day 2 ✅ — umbrella chart 5 datastore Bitnami (GHIM version) → ns data-<env>
+                    #            values/infra-<env>.yaml   : override datastore
+                    #            values/platform-<env>.yaml: env của app-config (+ Day 4 thêm 2 CÔNG TẮC
+                    #                                        ingress host/certificateArn, mặc định "")
+scripts/            # Day 2 ✅ — kind-up.sh · kind-secret.sh · kind-deploy.sh
 apps/               # Day 6 — ArgoCD Application/ApplicationSet (app-of-apps: staging + prod)
 external-secrets/   # Day 6 — ExternalSecret: CHỈ ref tên param SSM, không chứa giá trị
 docs/               # Tài liệu — ARCHITECTURE.md: bức tranh tổng quát hệ thống (góc nhìn hạ tầng)
                     #            MANUAL-SETUP.md: checklist thao tác tay (account/IAM/API key/SSM param/
                     #            GitHub secret) + bản đồ verify AWS Console theo Day + verify bill về 0
 ```
-> Hiện repo **mới có `first commit`** (chỉ 2 doc này) — charts/apps **CHƯA dựng**. Đã có remote `github.com/phucgigital03/BadmintonHub-GitOps`.
+Remote: `github.com/phucgigital03/BadmintonHub-GitOps`.
+
+### 🔴 Bẫy tên Service — lý do chart không dùng `.Release.Name`
+Day 6 ArgoCD đặt release name = `<svc>-<env>` (vd `user-service-staging`). Nếu chart đặt tên object theo release name thì Service thành `user-service-staging`, và: `EUREKA_URL` trỏ `eureka-server.<ns>.svc.cluster.local` → **NXDOMAIN, mất service discovery** · nginx trong image FE proxy `/api` sang host `api-gateway` → **502** · Ingress Day 4 khai `backend.service.name: api-gateway`/`frontend` → **không match**.
+→ Mọi `values/<svc>-<env>.yaml` **bắt buộc** có `nameOverride: <svc>`; chart `required` nó.
 
 ## Quy ước (BẮT BUỘC)
 - **Image tag = git SHA** (bất biến, KHÔNG `latest`). CI của app repo tự bump.
@@ -86,7 +95,7 @@ docs/               # Tài liệu — ARCHITECTURE.md: bức tranh tổng quát 
 |---|---|---|:--:|:--:|:--:|:--:|
 | eureka-server | 8761 | — | — | — | — | — |
 | api-gateway | 3000 | — | ✅ | — | — | — |
-| user-service | 3001 | user_db | ✅ | — | — | — |
+| user-service | 3001 | user_db | ✅ | ✅ | — | — |
 | court-service | 3002 | court_db | ✅ | ✅ | — | — |
 | booking-service | 3003 | booking_db | ✅ | ✅ | — | — |
 | payment-service | 3006 | payment_db | ✅ | ✅ | — | — |
@@ -95,15 +104,20 @@ docs/               # Tài liệu — ARCHITECTURE.md: bức tranh tổng quát 
 | frontend | 80 | — | — | — | — | — |
 
 - **= 9 image deploy.** `ai-service` (3010, **Python** · Ollama/Gemini) = **NGOÀI scope demo** (nặng RAM Free-Tier) → xem Phụ lục `Planning_CICD.md`. `matchmaking`/`coach`/`notification`/`event` = scaffold rỗng, không deploy.
-- **Health probe**: `GET /actuator/health/liveness` + `/actuator/health/readiness` (bật bằng env `MANAGEMENT_ENDPOINT_HEALTH_PROBES_ENABLED=true`). **KHÔNG dùng `/actuator/health` cho liveness** — nó là composite gộp db+redis+mongo+Eureka, một nhịp Redis lỗi là K8s restart pod → cascade. `frontend` (nginx) dùng `/`.
+- **Health probe**: liveness `GET /actuator/info` · readiness `GET /actuator/health` · `frontend` (nginx) dùng `/`.
+  🔴 **KHÔNG dùng `/actuator/health/liveness`** dù đã set `MANAGEMENT_ENDPOINT_HEALTH_PROBES_ENABLED=true`: đo thật trên kind, `SecurityConfig` của app chỉ `permitAll` đúng 2 path **literal** `/actuator/health` và `/actuator/info`, mọi sub-path trả **403** (không phải 404) → **pod không bao giờ Ready**, đúng với cả 7 service Java có Spring Security.
+  Nguyên tắc gốc vẫn được giữ: **liveness không được phụ thuộc datastore** — `/actuator/info` thoả điều đó còn chặt hơn; composite dùng cho **readiness** thì an toàn vì chỉ rút pod khỏi Endpoints chứ không restart.
+  📌 **TODO repo app**: thêm `/actuator/health/**` vào `permitAll` (1 chỗ ở `common-security`), build lại 8 image, rồi đổi probe về đúng nhóm liveness/readiness.
 - `SPRING_PROFILES_ACTIVE=prod` → payment/chat **bắt buộc** có `CLOUDINARY_*` (thiếu = fail boot, by design — `CloudinaryProdGuard` `@Profile("prod")`).
 - DNS in-cluster (namespace data): `postgresql.<data-ns>.svc.cluster.local:5432` (1 instance / 5 DB) · `redis-master...:6379` · `kafka...:9092` · `mongodb...:27017/chat_db` · `rabbitmq...:61613` (STOMP) · `eureka-server.<app-ns>...:8761`. Creds thật: `RABBITMQ_USER=badminton`.
 - ⚠️ **Default của Bitnami đánh nhau với app — phải override** (chi tiết §Day 2 `Planning_CICD.md`):
   - **Redis `auth.enabled=false`** — app chỉ có `host`/`port`, không có field password → auth bật = `NOAUTH`, và vì gateway rate-limit áp mọi route nên **toàn bộ request 500**.
-  - **Kafka** `sasl.enabled=false` + `autoCreateTopicsEnable=true` — code dùng ~17 topic theo tên, không có bean `NewTopic`.
+  - **Kafka** tắt SASL bằng `listeners.{client,controller,interbroker}.protocol=PLAINTEXT` + bật auto-create qua `controller.overrideConfiguration.auto.create.topics.enable` — code dùng ~17 topic theo tên, không có bean `NewTopic`. *(Chart 32.x đã bỏ `sasl.enabled` và `autoCreateTopicsEnable`; key sai bị Helm bỏ qua trong im lặng.)*
   - **Mongo** URI cần `?authSource=admin` (root user ở db `admin`) hoặc khai user scoped.
   - **RabbitMQ** cần `extraPlugins=rabbitmq_stomp` **+** `extraContainerPorts` **+** `service.extraPorts` cho 61613 **+** `auth.username=badminton`.
   - **Postgres** dùng superuser `postgres` (`ddl-auto=update` cần quyền tạo schema; app chỉ có 1 cặp user/pass cho cả 5 DB).
+  - **Registry**: `image.repository=bitnamilegacy/<img>` **+ `global.security.allowInsecureImages=true`** (thiếu cờ này chart chặn render), và chọn chart version có **tag tường minh** — bản mới nhất trỏ `tag: latest`.
+  - **MongoDB Bitnami chỉ có amd64** → kind trên Apple Silicon phải dùng `mongodbOss` (image `mongo:8.0`, multi-arch). EKS amd64 vẫn dùng chart Bitnami.
 - **FE same-origin**: FE gọi `/api` tương đối và derive WS từ `window.location` → 1 image FE cho mọi env, ALB DNS đổi sau mỗi `apply` không cần build lại. Chỉ `VITE_GOOGLE_CLIENT_ID` còn bake.
 
 ## Môi trường
@@ -121,27 +135,41 @@ docs/               # Tài liệu — ARCHITECTURE.md: bức tranh tổng quát 
 > Phần này được cập nhật tự động bằng lệnh `/handoff` cuối mỗi phiên làm việc.
 > Chỉ phản ánh **việc đang thực sự làm** ở repo này — kế hoạch chưa động tới thì để trong `Planning_CICD.md`.
 
-**Cập nhật lần cuối**: 2026-07-27 (dựng `.claude/` cho repo gitops: **8 rule** + **11 slash command** + Rules Index + mục Session Progress này. Rule adapt sang domain GitOps — không copy rule Java/Kafka/Redis từ repo app vì repo này không có source code.)
+**Cập nhật lần cuối**: 2026-07-31 (**Day 2**: dựng `charts/service/` + `charts/platform/` + `infra/` umbrella + 27 values + scripts kind; deploy thật lên kind và sửa 5 chỗ mà bản thiết kế trên giấy sai.)
 
 ### ✅ Đã hoàn thành
 - `CLAUDE.md` + `Planning_CICD.md` (Day 1→8, prompt paste-ready mỗi Day, runbook teardown/rebuild/demo §7).
 - `.claude/rules/` **8 file** + `.claude/commands/` **11 command** (xem §Rules Index).
-- Remote: `github.com/phucgigital03/BadmintonHub-GitOps`.
+- **Day 2** — `charts/service/` (generic, render được cả `frontend` lẫn `eureka-server`) · `charts/platform/` (ConfigMap `app-config`) · `infra/` umbrella 5 datastore Bitnami **đã ghim version** · **27** `values/<svc>-<env>.yaml` · `scripts/kind-*.sh` · `.env.example` + `.gitignore`.
+- `helm lint` xanh 27/27; `helm template` render đúng cho cả 3 env.
+- Trên kind: **5/5 datastore Running**, Redis trả `PONG` (không NOAUTH), Postgres có đủ 5 DB, RabbitMQ mở `stomp:61613` + plugin `rabbitmq_stomp` bật.
 
 ### 🔄 Đang làm
-- *(chưa có — repo mới chỉ có doc + `.claude/`)*
+- Deploy 9 service lên kind + e2e `login → đặt sân → thanh toán → chat` và 4 check bẫy P0.
 
 ### 📋 Việc tiếp theo (theo thứ tự ưu tiên)
-1. **Day 1 — Containerize**: mở Claude Code ở **`../badmintonHub` (app repo)**, paste prompt §Day 1 của `Planning_CICD.md`. **Không làm ở repo này.**
-2. **Day 2 — Helm + kind** (repo NÀY): `charts/service/` + `values/<svc>-<env>.yaml` (9 × 3) + `values/infra.yaml`. Gõ `/day 2`.
-3. Day 3 (app repo) → Day 4 (repo này) → Day 5 (app repo) → Day 6 (repo này) → Day 7, 8 (cả 2).
+1. **Đóng nốt Day 2**: e2e trên kind + 4 check bẫy P0.
+2. **Day 3 — EKS bằng Terraform**: mở Claude Code ở **`../badmintonHub` (app repo)**. **Không làm ở repo này.**
+3. **Day 4** (repo này): điền ECR URL + SHA thật vào 18 values `staging`/`prod` (đang là placeholder), thêm `templates/ingress.yaml` vào `charts/platform/`, và **xác minh `WebSocketConfig` của chat-service** (xem 🚩 dưới).
+4. Day 5 (app repo) → Day 6 (repo này) → Day 7, 8 (cả 2).
+
+### 🚩 Việc BẮT BUỘC làm ở Day 4 — không được quên
+`FRONTEND_URL` **không chỉ** dùng cho link email: `chat-service` nạp nó vào `app.frontend-url` → `WebSocketConfig.setAllowedOrigins()` để validate Origin của WS handshake. ALB DNS đổi sau mỗi `terraform apply` → **nếu không nhận wildcard thì mỗi buổi demo phải sửa ConfigMap**, phá tiêu chí vàng "rebuild 0 thao tác tay". Day 4 phải đọc `chat-service/.../WebSocketConfig.java` xem dùng được `setAllowedOriginPatterns("*")` không.
 
 ### 🧠 Quyết định kỹ thuật đã chốt
 - **1 chart `charts/service/` cho cả 9 service kể cả `frontend`** — điều kiện để ApplicationSet matrix của Day 6 dùng được.
-- **Secret = ESO + SSM, KHÔNG SealedSecrets** — keypair của SealedSecrets khoá theo cụm, mà cụm destroy mỗi buổi.
+- **Tên object lấy từ `nameOverride`, KHÔNG từ `.Release.Name`** — xem §Bẫy tên Service.
+- **Toàn bộ biến non-secret nằm ở MỘT ConfigMap `app-config`/namespace** (kể cả 5 `DB_*_URL`) → 27 file values rất mỏng, ít chỗ sai.
+- **Secret = ESO + SSM, KHÔNG SealedSecrets** — keypair của SealedSecrets khoá theo cụm, mà cụm destroy mỗi buổi. Day 2 trên kind tạm dùng `scripts/kind-secret.sh` sinh từ `.env`; tên target Secret giữ nguyên `app-secrets` nên Day 6 đổi sang ESO không phải sửa values.
 - **HTTPS = ACM, KHÔNG cert-manager** — ALB chỉ nhận cert ACM/IAM, không đọc K8s Secret.
-- **Domain là add-on của Day 8**, Day 1–7 chạy http trên ALB DNS thô; Ingress template hoá sẵn 2 công tắc `host`/`certificateArn`.
-- **Probe tách `liveness`/`readiness`**, không dùng `/actuator/health` composite.
+- **Domain là add-on của Day 8**, Day 1–7 chạy http trên ALB DNS thô.
+- **Probe tách `liveness`/`readiness`** + **`timeoutSeconds` khai tường minh** (mặc định 1s là quá ngắn cho actuator).
 
 ### 💬 Claude đã làm trong phiên này
-Dựng `.claude/rules/` + `.claude/commands/` cho repo gitops theo cùng tổ chức với repo app: port `handoff.md`, `done-check.md`, `self-review.md`, `debug.md`, `explain-*.md` sang domain GitOps và thêm command đặc thù (`/day`, `/helm-verify`, `/new-values`, `/promote`, `/demo-check`, `/teardown-check`). Nội dung rule rút từ `Planning_CICD.md` (Day 2/4/6/7/8 + §7 runbook) nên không phải mở lại doc 1200 dòng mỗi phiên.
+Dựng toàn bộ Day 2 rồi **deploy thật lên kind**, và chính việc chạy thật lộ ra 5 chỗ bản thiết kế trên giấy sai:
+1. `user-service` **có** Kafka (bảng env ghi "—").
+2. `FRONTEND_URL` còn là **WS allowed-origin** của chat-service, không chỉ link email.
+3. Kafka chart 32.x **bỏ** `sasl.enabled` + `autoCreateTopicsEnable` — viết theo rule cũ thì Helm bỏ qua trong im lặng.
+4. `bitnamilegacy/mongodb` **chỉ có amd64** → kind arm64 phải đảo sang `mongo:8.0`; đồng thời chart Bitnami cần `global.security.allowInsecureImages=true`.
+5. Probe **`timeoutSeconds` mặc định 1s** giết pod đang khoẻ (`context deadline exceeded`) — đã thấy `eureka-server` và `api-gateway` bị restart vì đúng lý do này.
+Cả 5 đã được sửa vào rule tương ứng trong `.claude/rules/`.

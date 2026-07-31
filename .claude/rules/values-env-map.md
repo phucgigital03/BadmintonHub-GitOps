@@ -9,15 +9,19 @@ globs: values/*.yaml
 
 | Service | Port | Postgres | Redis | Kafka | Mongo | RabbitMQ | probe path |
 |---|---|:--:|:--:|:--:|:--:|:--:|---|
-| `eureka-server` | 8761 | — | — | — | — | — | `/actuator/health/{liveness,readiness}` |
+| `eureka-server` | 8761 | — | — | — | — | — | live `/actuator/info` · ready `/actuator/health` |
 | `api-gateway` | 3000 | — | ✅ | — | — | — | ↑ |
-| `user-service` | 3001 | `user_db` | ✅ | — | — | — | ↑ |
+| `user-service` | 3001 | `user_db` | ✅ | ✅ | — | — | ↑ |
 | `court-service` | 3002 | `court_db` | ✅ | ✅ | — | — | ↑ |
 | `booking-service` | 3003 | `booking_db` | ✅ | ✅ | — | — | ↑ |
 | `payment-service` | 3006 | `payment_db` | ✅ | ✅ | — | — | ↑ |
 | `escrow-service` | 3007 | `escrow_db` | — | ✅ | — | — | ↑ |
 | `chat-service` | 3011 | — | ✅ | — | `chat_db` | ✅ STOMP 61613 | ↑ |
 | `frontend` | 80 | — | — | — | — | — | **`/`** (nginx, không actuator) |
+
+> ✏️ **Đã sửa ở Day 2 sau khi đọc `application.yml` thật**: `user-service` **CÓ** Kafka
+> (`spring.kafka.bootstrap-servers`, `application.yml:21-22`) — bảng cũ ghi "—". Thiếu
+> `KAFKA_BOOTSTRAP_SERVERS` thì nó trỏ `localhost:9092`.
 
 **KHÔNG deploy**: `ai-service` (3010, Python — Phụ lục A, nặng RAM Free-Tier) · `matchmaking`/`coach`/`notification`/`event` (scaffold rỗng).
 
@@ -39,12 +43,16 @@ globs: values/*.yaml
 | `RABBITMQ_USER` / `RABBITMQ_PASS` | `badminton` / creds | ConfigMap · **Secret** |
 | `CHAT_BROKER_RELAY` | `true` | ConfigMap |
 | `EUREKA_URL` | `http://eureka-server.staging.svc.cluster.local:8761/eureka` | ConfigMap |
-| `FRONTEND_URL` | URL công khai của env — sau same-origin **chỉ còn** dùng cho link email verify/reset | ConfigMap |
+| `FRONTEND_URL` | URL công khai của env — **2 chỗ dùng**, xem cảnh báo dưới bảng | ConfigMap |
 | `MANAGEMENT_ENDPOINT_HEALTH_PROBES_ENABLED` | `true` | ConfigMap |
 | `SPRING_PROFILES_ACTIVE` | `prod` | ConfigMap |
 | `JWT_SECRET` · `CLOUDINARY_*` · `GOOGLE_CLIENT_*` · `SENDGRID_*` | giá trị ở SSM `/badminton/<env>/*` | **Secret (ExternalSecret)** |
 
 Prod: thay `staging`→`prod`, `data-staging`→`data-prod`.
+
+### Biến có thật nhưng từng thiếu ở bảng này
+
+`JWT_ACCESS_EXPIRATION_MS` · `JWT_REFRESH_EXPIRATION_MS` · `SENDGRID_FROM_EMAIL` · `SENDGRID_FROM_NAME` · `BOOKING_HOLD_MINUTES` · `BOOKING_MAX_HOLD_MINUTES` · `PAYMENT_EXPIRE_MINUTES` · `GOOGLE_CLIENT_ID` / `GOOGLE_CLIENT_SECRET`. Tất cả đã nằm trong `app-config` (trừ 2 biến Google là Secret).
 
 ## Bẫy đã biết
 
