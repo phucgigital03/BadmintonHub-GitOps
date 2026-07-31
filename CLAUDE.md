@@ -114,7 +114,7 @@ Day 6 ArgoCD đặt release name = `<svc>-<env>` (vd `user-service-staging`). N�
   - **Redis `auth.enabled=false`** — app chỉ có `host`/`port`, không có field password → auth bật = `NOAUTH`, và vì gateway rate-limit áp mọi route nên **toàn bộ request 500**.
   - **Kafka** tắt SASL bằng `listeners.{client,controller,interbroker}.protocol=PLAINTEXT` + bật auto-create qua `controller.overrideConfiguration.auto.create.topics.enable` — code dùng ~17 topic theo tên, không có bean `NewTopic`. *(Chart 32.x đã bỏ `sasl.enabled` và `autoCreateTopicsEnable`; key sai bị Helm bỏ qua trong im lặng.)*
   - **Mongo** URI cần `?authSource=admin` (root user ở db `admin`) hoặc khai user scoped.
-  - **RabbitMQ** cần `extraPlugins=rabbitmq_stomp` **+** `extraContainerPorts` **+** `service.extraPorts` cho 61613 **+** `auth.username=badminton`.
+  - **RabbitMQ** cần **5** thứ cho STOMP: `extraPlugins=rabbitmq_stomp` + `extraContainerPorts` + `service.extraPorts` cho 61613 + `auth.username=badminton` + **`networkPolicy.extraIngress` mở 61613** (NetworkPolicy mặc định của chart chỉ cho 4369/5672/5671/25672/15672 → cổng phụ bị chặn trong im lặng, triệu chứng là *timeout* chứ không phải *refused*).
   - **Postgres** dùng superuser `postgres` (`ddl-auto=update` cần quyền tạo schema; app chỉ có 1 cặp user/pass cho cả 5 DB).
   - **Registry**: `image.repository=bitnamilegacy/<img>` **+ `global.security.allowInsecureImages=true`** (thiếu cờ này chart chặn render), và chọn chart version có **tag tường minh** — bản mới nhất trỏ `tag: latest`.
   - **MongoDB Bitnami chỉ có amd64** → kind trên Apple Silicon phải dùng `mongodbOss` (image `mongo:8.0`, multi-arch). EKS amd64 vẫn dùng chart Bitnami.

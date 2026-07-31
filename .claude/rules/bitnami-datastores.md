@@ -50,15 +50,45 @@ Code publish/consume **~17 topic theo tên ở runtime** (`booking.slot.changed`
 Root user nằm ở db `admin`. URI trỏ `/chat_db` bằng creds root mà thiếu `?authSource=admin` → **auth fail lúc boot**.
 Chọn 1: thêm `?authSource=admin` vào `MONGODB_CHAT_URI`, **hoặc** (sạch hơn) khai user scoped qua `auth.usernames` / `auth.passwords` / `auth.databases`.
 
-## ⚠️ RabbitMQ — là 3–4 chỗ riêng, không phải 1
+## ⚠️ RabbitMQ — là **5** chỗ riêng, không phải 1
 
 ```yaml
-extraPlugins: "rabbitmq_stomp"      # bật plugin
-extraContainerPorts: [...61613]     # mở port trên POD
-service.extraPorts: [...61613]      # mở port trên SERVICE
-auth.username: badminton            # khớp default RABBITMQ_USER trong code
+extraPlugins: "rabbitmq_stomp"      # ① bật plugin
+extraContainerPorts: [...61613]     # ② mở port trên POD
+service.extraPorts: [...61613]      # ③ mở port trên SERVICE
+auth.username: badminton            # ④ khớp default RABBITMQ_USER trong code
+networkPolicy:                      # ⑤ 🔴 MỞ TRONG NETWORKPOLICY — xem dưới
+  extraIngress:
+    - ports: [ { port: 61613, protocol: TCP } ]
 ```
 Thiếu **bất kỳ** cái nào → chat-service kết nối STOMP relay thất bại.
+
+### 🔴 ⑤ NetworkPolicy mặc định của Bitnami nuốt cổng phụ (đo thật, Day 2)
+
+Chart Bitnami **tự tạo NetworkPolicy** (`networkPolicy.enabled` mặc định **true**) và chỉ liệt kê các cổng nó biết: `4369, 5672, 5671, 25672, 15672`. **61613 không có trong đó.**
+
+Cái làm bẫy này khó chịu là mọi dấu hiệu bề mặt đều **xanh**:
+
+```
+kubectl get svc rabbitmq          → stomp:61613 có
+kubectl get endpointslice         → stomp=61613 có
+rabbitmq-diagnostics listeners    → "port: 61613, protocol: stomp" đang nghe
+rabbitmq-plugins list -e          → [E*] rabbitmq_stomp
+```
+
+Nhưng từ pod khác thì **timeout**. Cách khoanh vùng nhanh (đã dùng để tìm ra):
+
+| Từ đâu → tới đâu | 5672 | 61613 |
+|---|:--:|:--:|
+| chat-service → Service DNS | ✅ | ❌ |
+| chat-service → **pod IP** (bỏ qua Service) | ✅ | ❌ |
+| **trong chính pod rabbitmq** → 127.0.0.1 và pod IP | ✅ | ✅ |
+
+Cùng nguồn, cùng đích, chỉ khác cổng ⇒ không phải DNS/Service/kube-proxy ⇒ lọc theo cổng ⇒ NetworkPolicy.
+
+⚠️ Triệu chứng là `io.netty.channel.ConnectTimeoutException` — **không** phải `connection refused`, **không** phải lỗi auth. Rất dễ đi tìm nhầm ở credentials. Nhớ: *refused = không ai nghe · timeout = có thứ gì đó nuốt gói tin*.
+
+Verify đã sửa: log chat-service phải có `"System" session connected` và `BrokerAvailabilityEvent[available=true]`.
 
 ## ⚠️ PostgreSQL — superuser
 

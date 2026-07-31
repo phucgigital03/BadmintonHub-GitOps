@@ -134,8 +134,9 @@ mongodbOss:
       memory: 512Mi
 
 # ------------------------------------------------------------------ RabbitMQ
-# ⚠️ STOMP relay là 4 chỗ riêng, không phải 1. Thiếu bất kỳ cái nào → chat-service kết nối
-# relay thất bại: bật plugin · mở port trên POD · mở port trên SERVICE · đúng username.
+# ⚠️ STOMP relay là 5 chỗ riêng, không phải 1. Thiếu bất kỳ cái nào → chat-service kết nối
+# relay thất bại: bật plugin · mở port trên POD · mở port trên SERVICE · đúng username ·
+# VÀ mở 61613 trong NetworkPolicy (xem ngay dưới).
 rabbitmq:
   enabled: true
   fullnameOverride: rabbitmq
@@ -160,5 +161,17 @@ rabbitmq:
         port: 61613
         targetPort: 61613
         protocol: TCP
+  # 🔴 Chart Bitnami TỰ TẠO NetworkPolicy (networkPolicy.enabled mặc định true) và chỉ liệt kê
+  # các cổng nó biết: 4369, 5672, 5671, 25672, 15672. 61613 KHÔNG có trong đó → cổng mở trên
+  # pod, Service có endpoint, `rabbitmq-diagnostics listeners` báo STOMP đang nghe, nhưng pod
+  # khác gọi vào thì **timeout**. Đã đo: từ chat-service, rabbitmq:5672 MỞ còn rabbitmq:61613
+  # KHÔNG — kể cả khi gọi thẳng pod IP; từ trong chính pod rabbitmq thì 61613 lại mở bình thường.
+  # Triệu chứng đánh lừa: `ConnectTimeoutException` chứ không phải `connection refused` hay lỗi
+  # auth, nên rất dễ đi tìm nhầm ở phía credentials.
+  networkPolicy:
+    extraIngress:
+      - ports:
+          - port: 61613
+            protocol: TCP
   persistence:
     size: 2Gi
