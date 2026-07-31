@@ -1,0 +1,6 @@
+apiVersion: v2
+name: service
+description: Chart tái sử dụng cho CẢ 9 service của BadmintonHub (8 Java + frontend nginx)
+type: application
+version: 0.1.0
+appVersion: "1.0.0"

@@ -1,0 +1,15 @@
+# 🔴 Repo PUBLIC. Không bao giờ commit giá trị secret thô.
+# .env chỉ tồn tại trên máy dev để scripts/kind-secret.sh nạp Secret vào kind.
+# staging/prod KHÔNG có file tương đương: giá trị nằm ở SSM, Git chỉ ref tên param (Day 6).
+.env
+.env.*
+!.env.example
+
+# Helm dependency: .tgz chart con tải về thì không commit.
+# Chart.lock thì CÓ commit — nó ghim thêm digest, và ArgoCD dùng nó để chạy
+# `helm dependency build` (bản đã khoá) thay vì `update` (tự nâng version).
+charts/*/charts/
+infra/charts/
+*.tgz
+
+.DS_Store

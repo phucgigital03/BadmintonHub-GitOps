@@ -1,0 +1,98 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "service.name" . }}
+  labels:
+    {{- include "service.labels" . | nindent 4 }}
+    {{- include "service.selectorLabels" . | nindent 4 }}
+spec:
+  replicas: {{ .Values.replicaCount }}
+  strategy:
+    type: {{ .Values.strategy }}
+  selector:
+    matchLabels:
+      {{- include "service.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "service.labels" . | nindent 8 }}
+        {{- include "service.selectorLabels" . | nindent 8 }}
+      {{- with .Values.podAnnotations }}
+      annotations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+    spec:
+      # Eureka lease-expiration-duration-in-seconds: 30 → bản ghi của pod đã chết còn sống 30s,
+      # gateway vẫn route vào đó = 5xx trước mặt khán giả. preStop sleep để pod ngừng nhận traffic
+      # mới nhưng vẫn phục vụ request đang dở trong lúc Eureka/Endpoints hội tụ.
+      terminationGracePeriodSeconds: 45
+      containers:
+        - name: {{ include "service.name" . }}
+          image: "{{ required "image.repository bắt buộc" .Values.image.repository }}:{{ required "image.tag bắt buộc (git SHA, KHÔNG dùng latest)" .Values.image.tag }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          ports:
+            - name: http
+              containerPort: {{ .Values.port }}
+              protocol: TCP
+          {{- if or .Values.envFrom.configMap .Values.envFrom.secret }}
+          envFrom:
+            {{- if .Values.envFrom.configMap }}
+            - configMapRef:
+                name: {{ .Values.envFrom.configMap }}
+            {{- end }}
+            {{- if .Values.envFrom.secret }}
+            - secretRef:
+                name: {{ .Values.envFrom.secret }}
+            {{- end }}
+          {{- end }}
+          {{- with .Values.env }}
+          env:
+            {{- range $k, $v := . }}
+            - name: {{ $k }}
+              value: {{ $v | quote }}
+            {{- end }}
+          {{- end }}
+          # startup → liveness → readiness. liveness/readiness KHÔNG dùng /actuator/health
+          # (composite gộp db+redis+mongo+Eureka: một nhịp Redis lỗi là K8s restart pod → cascade).
+          # timeoutSeconds phải khai tường minh — mặc định 1s và probe timeout bị tính là fail.
+          startupProbe:
+            httpGet:
+              path: {{ .Values.livenessPath }}
+              port: http
+            failureThreshold: {{ .Values.startupFailureThreshold }}
+            periodSeconds: 5
+            timeoutSeconds: {{ .Values.probeTimeoutSeconds }}
+          livenessProbe:
+            httpGet:
+              path: {{ .Values.livenessPath }}
+              port: http
+            periodSeconds: 10
+            failureThreshold: {{ .Values.livenessFailureThreshold }}
+            timeoutSeconds: {{ .Values.probeTimeoutSeconds }}
+          readinessProbe:
+            httpGet:
+              path: {{ .Values.readinessPath }}
+              port: http
+            periodSeconds: 10
+            failureThreshold: {{ .Values.readinessFailureThreshold }}
+            timeoutSeconds: {{ .Values.probeTimeoutSeconds }}
+          lifecycle:
+            preStop:
+              exec:
+                command: ["sh", "-c", "sleep 15"]
+          {{- with .Values.resources }}
+          resources:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}

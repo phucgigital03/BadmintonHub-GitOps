@@ -1,0 +1,77 @@
+# Default cho charts/service — MỌI values/<svc>-<env>.yaml đều override nameOverride/image/port/probe.
+#
+# ⚠️ nameOverride là BẮT BUỘC khai ở values file.
+# Tên Deployment/Service KHÔNG lấy theo .Release.Name: Day 6 ArgoCD đặt release name = <svc>-<env>
+# (vd user-service-staging) → Service sẽ thành "user-service-staging" và khi đó
+#   · EUREKA_URL trỏ eureka-server.<ns>.svc.cluster.local → NXDOMAIN (mất service discovery)
+#   · nginx trong image FE proxy /api sang host "api-gateway" → 502
+#   · Ingress Day 4 khai backend.service.name: api-gateway / frontend → không match
+nameOverride: ""
+
+image:
+  repository: ""
+  tag: ""
+  # IfNotPresent: trên kind image được nạp bằng `kind load docker-image`, KHÔNG có trên registry.
+  # Always sẽ khiến kubelet đi hỏi Docker Hub → ErrImagePull dù image đã nằm sẵn trong node.
+  pullPolicy: IfNotPresent
+
+# Demo ephemeral: 1 replica mọi service. Không tạo PodDisruptionBudget ở posture này —
+# minAvailable:1 trên Deployment 1 replica chặn vĩnh viễn mọi drain tự nguyện.
+replicaCount: 1
+
+# RollingUpdate với 1 replica ⇒ maxUnavailable=0 ⇒ pod CŨ phải sống tới khi pod MỚI Ready
+# ⇒ hai JVM cùng chạy trong lúc rollout, đúng lúc pod mới cần CPU nhất để boot.
+#   dev (kind, RAM/CPU chật): Recreate — chấp nhận gián đoạn vài chục giây, đổi lấy boot nhanh.
+#   staging/prod: RollingUpdate — không gián đoạn trước mặt người dùng.
+strategy: RollingUpdate
+
+port: 8080
+
+# PATH ĐẦY ĐỦ — chart không tự nối chuỗi. Java: /actuator/health/liveness · frontend nginx: /
+livenessPath: /actuator/health/liveness
+readinessPath: /actuator/health/readiness
+
+# 60 × 5s = 300s cho JVM boot. Đo thật ở Day 1 (docker-compose.app.yml): một Spring web context
+# mất 128s để khởi tạo trên máy 8GB, và compose phải đặt start_period: 300s.
+# failureThreshold 30 (150s) sẽ giết pod giữa lúc đang boot hợp lệ.
+startupFailureThreshold: 60
+
+# 🔴 KHÔNG để mặc định. `timeoutSeconds` mặc định của K8s là 1 GIÂY — actuator của Spring Boot
+# dưới sức ép CPU/RAM thường trả lời chậm hơn thế, và probe timeout bị tính y như probe fail.
+# Hậu quả đúng bằng cái mà việc tách liveness/readiness sinh ra để tránh: K8s giết pod đang
+# KHOẺ, pod restart lại làm cụm thêm tải → cascade.
+# Đã dính thật trên kind: eureka-server và api-gateway bị giết với
+#   "Liveness probe failed: context deadline exceeded (Client.Timeout exceeded while awaiting headers)"
+# Không phải chuyện riêng của kind: node EKS t3.xlarge cũng phải gánh staging + prod + observability.
+probeTimeoutSeconds: 5
+
+# Liveness = "app có còn sống không", KHÔNG phải "app có đang nhanh không".
+# 6 × 10s = 60s không trả lời mới restart. Vẫn bắt được treo thật (deadlock, JVM đứng), nhưng
+# không giết pod chỉ vì một đợt GC dài hay lúc node đang bận boot service khác.
+# Readiness thì giữ nhạy (3) — đó mới là cái nên rút pod khỏi Service khi nó chậm.
+livenessFailureThreshold: 6
+readinessFailureThreshold: 3
+
+# Cả hai optional — frontend không có cái nào (nginx, không đọc env Eureka/DB).
+envFrom:
+  configMap: ""
+  secret: ""
+
+# Biến riêng của service (nếu có). Hầu hết biến non-secret đã nằm ở ConfigMap app-config
+# dùng chung của charts/platform, nên block này thường rỗng.
+env: {}
+
+resources:
+  requests:
+    memory: 128Mi
+    cpu: 100m
+  limits:
+    memory: 448Mi
+
+service:
+  type: ClusterIP
+
+podAnnotations: {}
+nodeSelector: {}
+tolerations: []
+affinity: {}
