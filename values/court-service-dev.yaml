@@ -28,9 +28,16 @@ envFrom:
   configMap: app-config
   secret: app-secrets
 
+# Image bake -XX:MaxRAMPercentage=75. Ở limit 640Mi thì heap chiếm 75% và chỉ còn
+# 25% cho metaspace + thread stack + code cache + direct buffer — Spring Boot cần
+# ~150-200Mi phần đó. Đã đo: 75% ở 448Mi => OOMKilled. Hạ tỉ lệ thay vì nâng limit,
+# vì nâng limit thì 8 JVM không còn vừa RAM node.
+env:
+  JAVA_TOOL_OPTIONS: "-XX:MaxRAMPercentage=55 -XX:+UseContainerSupport"
+
 resources:
   requests:
     memory: 128Mi
     cpu: 100m
   limits:
-    memory: 448Mi
+    memory: 640Mi

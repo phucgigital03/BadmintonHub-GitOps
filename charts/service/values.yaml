@@ -71,6 +71,11 @@ envFrom:
 
 # Biến riêng của service (nếu có). Hầu hết biến non-secret đã nằm ở ConfigMap app-config
 # dùng chung của charts/platform, nên block này thường rỗng.
+#
+# ⚠️ Chỗ hay dùng nhất là ghi đè JAVA_TOOL_OPTIONS. Image bake sẵn MaxRAMPercentage=75, nghĩa là
+# heap lấy 75% limit và phần CÒN LẠI phải đủ cho metaspace + thread stack + code cache + direct
+# buffer (Spring Boot cần ~150-200Mi). Với limit 448Mi thì 25% chỉ còn 112Mi → OOMKilled.
+# Đã dính thật ở Day 2: user-service Terminated/OOMKilled ở limit 448Mi.
 env: {}
 
 resources:

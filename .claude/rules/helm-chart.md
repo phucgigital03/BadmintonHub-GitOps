@@ -108,6 +108,39 @@ Hai hệ quả đã đưa vào repo: `values/<svc>-dev.yaml` dùng `startupFailu
 
 **Bằng chứng đã tách đúng** (làm trên kind, miễn phí): `kubectl scale --replicas=0` Redis → `/actuator/health` trả **503** nhưng `/actuator/health/liveness` **vẫn 200** → pod **không** restart.
 
+## 🔴 `MaxRAMPercentage=75` + limit chật = OOMKilled (đo thật, Day 2)
+
+Image bake sẵn `JAVA_TOOL_OPTIONS=-XX:MaxRAMPercentage=75`. Heap lấy 75% limit, **phần còn lại phải đủ cho metaspace + thread stack + code cache + direct buffer** — Spring Boot cần khoảng **150–200Mi** cho phần đó.
+
+| limit | % | heap | còn lại cho non-heap | kết quả |
+|---|---|---|---|---|
+| 448Mi | 75 | 336Mi | **112Mi** | ❌ OOMKilled |
+| 448Mi | 55 | 248Mi | 200Mi | ❌ **vẫn** OOMKilled khi Redis chết |
+| 640Mi | 55 | 352Mi | 288Mi | ổn |
+| 768Mi | 70 | 538Mi | 230Mi | ổn (staging/prod) |
+
+Hai lần chỉnh mới ra: hạ tỉ lệ **không đủ**, phải nâng cả limit. Lý do là kịch bản Redis chết làm request readiness tồn đọng (xem mục dưới) nên đỉnh RSS cao hơn hẳn lúc chạy bình thường. Đo lúc mọi thứ khoẻ rồi kết luận "448Mi là đủ" là sai — phải đo cả lúc datastore hỏng.
+
+`values/<svc>-dev.yaml`: `limits.memory: 640Mi` + `env.JAVA_TOOL_OPTIONS: "-XX:MaxRAMPercentage=55"`. staging/prod: `768Mi` + `70`.
+
+Verify nhanh trong container: `java -XX:+PrintFlagsFinal -version | grep MaxHeapSize`.
+
+⚠️ Ghi đè `JAVA_TOOL_OPTIONS` **thay thế hoàn toàn** giá trị trong image, nên phải khai lại cả `-XX:+UseContainerSupport`.
+
+### Composite `/actuator/health` KHÔNG trả 503 ngay — nó TREO
+
+Khi Redis chết, đo được ở readiness probe theo đúng thứ tự này:
+
+```
+Readiness probe failed: ... EOF
+Readiness probe failed: HTTP probe failed with statuscode: 503
+Readiness probe failed: ... context deadline exceeded   (x24)
+```
+
+Health indicator của Redis **block tới khi hết timeout của chính nó**, dài hơn `timeoutSeconds` của probe. Kubelet bỏ cuộc nhưng request phía server vẫn chạy tiếp, và cứ 10s lại thêm một request nữa → tồn đọng thread + buffer → góp phần đẩy pod qua limit.
+
+Hệ quả thực dụng: dùng composite cho readiness là **chấp nhận được** (không restart pod) nhưng **đừng đặt `periodSeconds` quá ngắn** và đừng để limit RAM sát mép. Nếu sau này permit được `/actuator/health/**` ở repo app thì nhóm `readiness` chuẩn của Spring Boot không có vấn đề này vì nó lọc sẵn component không thiết yếu.
+
 ## Graceful shutdown (Day 7)
 
 `preStop` sleep + `terminationGracePeriodSeconds` là **bắt buộc**, không phải nice-to-have: Eureka `lease-expiration-duration-in-seconds: 30` nghĩa là bản ghi cũ còn sống 30s sau khi pod chết → gateway route vào pod đã chết = **5xx trước mặt khán giả**.
