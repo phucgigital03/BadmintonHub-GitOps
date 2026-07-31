@@ -144,8 +144,10 @@ Day 6 ArgoCD đặt release name = `<svc>-<env>` (vd `user-service-staging`). N�
 - `helm lint` xanh 27/27; `helm template` render đúng cho cả 3 env.
 - Trên kind: **5/5 datastore Running**, Redis trả `PONG` (không NOAUTH), Postgres có đủ 5 DB, RabbitMQ mở `stomp:61613` + plugin `rabbitmq_stomp` bật.
 
+- **Trên kind, đã chạy thật**: cả **9/9 service đều Ready được**; `scripts/kind-verify.sh` **13/14 xanh**; e2e qua `api-gateway`: `register` 201 · `login` trả JWT · `/api/clubs` 200 (có seed data) · `/api/clubs/{id}/courts` 200 · `/api/bookings` 200 · Kafka consumer connected · Eureka nhận đủ đăng ký.
+
 ### 🔄 Đang làm
-- Deploy 9 service lên kind + e2e `login → đặt sân → thanh toán → chat` và 4 check bẫy P0.
+- Đóng nốt Day 2: e2e phần `thanh toán → chat` (cần lượt 2 vì máy chỉ gánh ~6 service cùng lúc).
 
 ### 📋 Việc tiếp theo (theo thứ tự ưu tiên)
 1. **Đóng nốt Day 2**: e2e trên kind + 4 check bẫy P0.
@@ -166,10 +168,23 @@ Day 6 ArgoCD đặt release name = `<svc>-<env>` (vd `user-service-staging`). N�
 - **Probe tách `liveness`/`readiness`** + **`timeoutSeconds` khai tường minh** (mặc định 1s là quá ngắn cho actuator).
 
 ### 💬 Claude đã làm trong phiên này
-Dựng toàn bộ Day 2 rồi **deploy thật lên kind**, và chính việc chạy thật lộ ra 5 chỗ bản thiết kế trên giấy sai:
-1. `user-service` **có** Kafka (bảng env ghi "—").
-2. `FRONTEND_URL` còn là **WS allowed-origin** của chat-service, không chỉ link email.
-3. Kafka chart 32.x **bỏ** `sasl.enabled` + `autoCreateTopicsEnable` — viết theo rule cũ thì Helm bỏ qua trong im lặng.
-4. `bitnamilegacy/mongodb` **chỉ có amd64** → kind arm64 phải đảo sang `mongo:8.0`; đồng thời chart Bitnami cần `global.security.allowInsecureImages=true`.
-5. Probe **`timeoutSeconds` mặc định 1s** giết pod đang khoẻ (`context deadline exceeded`) — đã thấy `eureka-server` và `api-gateway` bị restart vì đúng lý do này.
-Cả 5 đã được sửa vào rule tương ứng trong `.claude/rules/`.
+Dựng toàn bộ Day 2 rồi **deploy thật lên kind**. Chính việc chạy thật lộ ra 9 chỗ bản thiết kế trên giấy sai — tất cả đã sửa vào `.claude/rules/` kèm cách chẩn đoán:
+
+**Sai ở bảng env / doc**
+1. `user-service` **có** Kafka (bảng ghi "—").
+2. `FRONTEND_URL` còn là **WS allowed-origin** của chat-service, không chỉ link email → việc bắt buộc của Day 4.
+
+**Sai ở override Bitnami**
+3. Kafka chart 32.x **bỏ** `sasl.enabled` + `autoCreateTopicsEnable`; Helm bỏ qua key sai **trong im lặng** → phải kiểm `server.properties` trên broker, không phải YAML đã render.
+4. `bitnamilegacy/mongodb` **chỉ có amd64** → kind arm64 dùng `mongodbOss` (`mongo:8.0`); chart cần `global.security.allowInsecureImages=true`.
+5. **NetworkPolicy mặc định của chart nuốt cổng phụ**: RabbitMQ chỉ mở 4369/5672/5671/25672/15672 → STOMP 61613 bị chặn bằng **timeout** trong khi Service, EndpointSlice, `rabbitmq-diagnostics listeners` và plugin đều báo xanh. RabbitMQ vì vậy là **5 chỗ** phải override.
+
+**Sai ở chart**
+6. 🔴 **Spring Security chặn `/actuator/health/**` → 403** (kể cả khi đã bật `MANAGEMENT_ENDPOINT_HEALTH_PROBES_ENABLED`) → **7/8 service Java không bao giờ Ready**. Đổi sang liveness `/actuator/info` + readiness `/actuator/health`.
+7. Probe `timeoutSeconds` mặc định **1s** giết pod đang khoẻ; liveness `failureThreshold` 3 quá nhạy → 6.
+8. `MaxRAMPercentage=75` + limit 448Mi → **OOMKilled** (chỉ còn 112Mi cho non-heap). dev: 640Mi + 55%.
+9. `RollingUpdate` với 1 replica bắt 2 JVM cùng chạy lúc rollout → dev dùng `Recreate`.
+
+**Bài học chẩn đoán quan trọng nhất**: CPU 1298% và load average 61 **không phải** dấu hiệu thiếu phần cứng — đó là hệ quả của vòng lặp restart do (6) và (8), mỗi vòng lại boot thêm một JVM. Tôi đã kết luận nhầm "máy 8 GB không đủ" và suýt dời cả phần verify sang EKS. Sửa xong 2 bug: 3 service Ready trong <60s, load average về 3.67. **Luôn nhìn cột `RESTARTS` trước khi đổ lỗi cho phần cứng.**
+
+**Phát hiện thuộc repo app** (không chặn EKS, ghi lại để biết): `frontend/nginx.conf` dùng `resolver 127.0.0.11` — DNS của Docker, không tồn tại trong K8s (kube-dns là `10.96.0.10`) → nginx của FE trả **502** với mọi `/api`, `/ws`. Không ảnh hưởng Day 4 vì ALB Ingress route `/api` thẳng vào gateway, FE chỉ phục vụ file tĩnh.

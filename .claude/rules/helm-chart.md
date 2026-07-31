@@ -95,11 +95,33 @@ Readiness thì **giữ nhạy**: rút pod chậm ra khỏi Service là đúng, v
 
 Đọc nhầm hai cái này là đi sai hướng cả buổi. Và để ý probe nào báo: `failed **startup** probe` khác hẳn `failed **liveness** probe`.
 
-### Nút thắt trên kind là CPU, không phải RAM
+### 🔴 "Cụm chậm" gần như luôn là VÒNG LẶP RESTART, không phải thiếu phần cứng
 
-Đo thật ở Day 2 (máy 8 CPU / Docker 5.78 GB): thả 4 service boot cùng lúc → CPU node **954-1298%** (trần 800%), trong khi RAM mới dùng **2.2/5.8 GB**. Mọi JVM chậm lại → không cái nào mở nổi cổng trong 300s → K8s giết pod đang boot **hợp lệ** → restart lại càng nặng thêm.
+Đây là bài học đắt nhất của Day 2 — tôi đã chẩn đoán nhầm một lượt trước khi tìm ra.
 
-Hai hệ quả đã đưa vào repo: `values/<svc>-dev.yaml` dùng `startupFailureThreshold: 180` (900s, so với 60 ở staging/prod), và `scripts/kind-deploy.sh` deploy **tuần tự nghiêm ngặt** — Spring boot xong thì gần như không ăn CPU, nên tuần tự là cách duy nhất hội tụ được. Đừng "tối ưu" bằng cách chạy song song cho nhanh.
+Quan sát ban đầu: CPU node **954–1298%** (trần 800%), load average **61**, `kubectl exec` fail với `ttrpc: closed`, `helm` fail với `TLS handshake timeout`. Kết luận vội: "máy 8 GB không đủ".
+
+Kết luận đó **sai**. Nguyên nhân thật là hai bug ở trên — probe 403 và OOMKilled — làm pod chết đi sống lại liên tục, và **mỗi vòng restart lại boot thêm một JVM**. Chính đống JVM boot chồng lên nhau tạo ra cơn bão CPU, chứ không phải workload ở trạng thái ổn định.
+
+Sau khi sửa hai bug: **3 service Ready trong dưới 60 giây, boot song song, 0 restart**, load average từ 61 xuống **3.67**.
+
+**Cách phân biệt** — nhìn `RESTARTS` trước khi đổ lỗi cho phần cứng:
+
+| Dấu hiệu | Nghĩa |
+|---|---|
+| `RESTARTS` tăng đều ở nhiều pod | vòng lặp restart — đi tìm **nguyên nhân** (probe? OOM?), đừng nới timeout |
+| `RESTARTS` = 0 mà vẫn chậm | thật sự thiếu tài nguyên |
+| Nhiều pod restart **cùng một thời điểm** | sự kiện tầng node (hết RAM), không phải lỗi từng service |
+
+Chỉ khi `RESTARTS` đã sạch mà vẫn chậm thì mới nói tới ngân sách boot và tuần tự hoá.
+
+### Trần thật của kind trên máy 8 GB: ~6 service
+
+Sau khi hết vòng lặp restart, đo lại: cả **9/9 service đều Ready được** (đủ để chứng minh chart + values + wiring đúng cho cả 9), nhưng node còn **95 MB free** → probe timeout → kubelet giết 6 pod **cùng lúc** với `exit=137`.
+
+Ngân sách: 9 × 640Mi limit = 5.76 GB trên node 5.9 GB — vừa khít, không còn biên. Thực tế chạy ổn định được **~6 service + 5 datastore**.
+
+Hệ quả cho Day 2: chạy **2 lượt** — lượt 1 đường lõi (`eureka` `gateway` `user` `court` `booking` `frontend`) cho e2e login→đặt sân; lượt 2 gỡ bớt rồi dựng `chat-service` để verify Mongo `authSource` + STOMP relay. `scripts/kind-verify.sh` có `have()` nên tự bỏ qua check của service chưa deploy.
 
 ### `strategy: Recreate` cho posture 1 replica trên máy chật
 
