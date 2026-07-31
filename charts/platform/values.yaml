@@ -1,0 +1,59 @@
+# Default cho charts/platform. Mỗi env override ở infra/values/platform-<env>.yaml.
+#
+# ConfigMap app-config chứa TOÀN BỘ biến non-secret của mọi service (kể cả 5 biến DB_*_URL).
+# Service nào chỉ đọc biến của nó — dư biến vô hại — đổi lại values/<svc>-<env>.yaml gần như
+# không có block env riêng, nên 27 file values rất mỏng và ít chỗ sai.
+
+configMapName: app-config
+
+# ⚠️ Sửa ConfigMap KHÔNG làm pod restart — `envFrom` chỉ đọc lúc container khởi động.
+# ArgoCD sync xong sẽ báo Synced/Healthy trong khi pod vẫn chạy giá trị CŨ.
+# Đường rebuild bình thường (destroy → apply → bootstrap) không dính, vì pod sinh ra SAU ConfigMap.
+# Chỉ dính khi sửa app-config trên cụm ĐANG SỐNG — đúng 2 lúc: Day 4 (điền ALB DNS vào
+# FRONTEND_URL) và Day 8 (đổi sang domain). Sau khi sync, phải:
+#     kubectl -n <env> rollout restart deploy
+# Nhớ kỹ vì triệu chứng là chat chết mà mọi thứ khác xanh, và ArgoCD không hề báo gì.
+
+# Namespace app và namespace datastore. Chart tự ghép chuỗi DNS in-cluster từ 2 giá trị này
+# → đổi env chỉ là đổi 2 dòng, không phải sửa 20 chuỗi FQDN bằng tay.
+appNamespace: dev
+dataNamespace: data-dev
+
+# Tên Service của các chart Bitnami. Khớp fullnameOverride khai ở infra/values/infra-<env>.yaml.
+# Redis architecture=standalone → Service tên <fullnameOverride>-master.
+datastore:
+  postgresHost: postgresql
+  redisHost: redis-master
+  kafkaHost: kafka
+  mongoHost: mongodb
+  rabbitmqHost: rabbitmq
+
+# URL công khai của env.
+# ⚠️ KHÔNG chỉ dùng cho link email verify/reset của user-service: chat-service nạp nó vào
+# app.frontend-url và WebSocketConfig.setAllowedOrigins() dùng để validate Origin header của
+# WS handshake → sai giá trị = chat chết, các luồng khác vẫn xanh.
+frontendUrl: http://localhost:8081
+
+# "" ở dev (Cloudinary degrade về placeholder URL, không cần API key thật trên kind).
+# "prod" ở staging/prod → CloudinaryProdGuard @Profile("prod") sẽ CHẶN BOOT payment/chat
+# nếu thiếu CLOUDINARY_* — đây là by design, nạp param chứ đừng bỏ profile.
+springProfilesActive: ""
+
+booking:
+  # Invariant: PAYMENT_EXPIRE_MINUTES được template ép bằng đúng holdMinutes.
+  # Hai giá trị lệch nhau = booking hết hạn trước/sau payment, slot kẹt.
+  holdMinutes: 10
+  maxHoldMinutes: 30
+
+jwt:
+  # ⚠️ Để dạng CHUỖI. Số nguyên lớn bị Helm/YAML hiểu là float rồi render ra "2.592e+09",
+  # Spring parse Long thất bại → user-service fail boot. Đã dính thật khi để không quote.
+  accessExpirationMs: "900000"
+  refreshExpirationMs: "2592000000"
+
+sendgrid:
+  fromEmail: noreply@badmintonhub.vn
+  fromName: BadmintonHub
+
+# Thoát hiểm: thêm/ghi đè key bất kỳ mà không phải sửa template.
+extraConfig: {}

@@ -1,0 +1,73 @@
+{{- $pg := printf "%s.%s.svc.cluster.local" .Values.datastore.postgresHost .Values.dataNamespace -}}
+{{- $jdbc := printf "jdbc:postgresql://%s:5432" $pg -}}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ .Values.configMapName }}
+  labels:
+    app.kubernetes.io/name: platform
+    app.kubernetes.io/managed-by: {{ .Release.Service }}
+data:
+  # ---- PostgreSQL: MỘT instance / 5 database (compose local chạy 5 PG riêng) ----
+  # Mỗi service trỏ full-URL riêng nên gộp instance mà vẫn 0 đổi code.
+  # chat-service KHÔNG có Postgres (đã exclude DataSourceAutoConfiguration), escrow KHÔNG có Redis.
+  DB_USER_URL: {{ printf "%s/user_db" $jdbc | quote }}
+  DB_COURT_URL: {{ printf "%s/court_db" $jdbc | quote }}
+  DB_BOOKING_URL: {{ printf "%s/booking_db" $jdbc | quote }}
+  DB_PAYMENT_URL: {{ printf "%s/payment_db" $jdbc | quote }}
+  DB_ESCROW_URL: {{ printf "%s/escrow_db" $jdbc | quote }}
+
+  # ---- Redis ----
+  # auth.enabled=false ở chart Bitnami: app chỉ khai spring.data.redis.host/port, KHÔNG có field
+  # password. Bật auth = mọi lệnh trả NOAUTH, và gateway áp RequestRateLimiter cho MỌI route
+  # nên hỏng Redis = TOÀN BỘ request 500, không phải mất một tính năng.
+  REDIS_HOST: {{ printf "%s.%s.svc.cluster.local" .Values.datastore.redisHost .Values.dataNamespace | quote }}
+  REDIS_PORT: "6379"
+
+  # ---- Kafka ----
+  # ⚠️ user-service CŨNG khai spring.kafka.bootstrap-servers (application.yml:21-22) — bảng env
+  # trong doc từng ghi "—" cho user-service, sai. Thiếu biến này nó trỏ localhost:9092.
+  KAFKA_BOOTSTRAP_SERVERS: {{ printf "%s.%s.svc.cluster.local:9092" .Values.datastore.kafkaHost .Values.dataNamespace | quote }}
+
+  # ---- RabbitMQ (STOMP relay cho chat) ----
+  # RABBITMQ_PASS là secret → nằm ở Secret app-secrets, không ở đây.
+  RABBITMQ_HOST: {{ printf "%s.%s.svc.cluster.local" .Values.datastore.rabbitmqHost .Values.dataNamespace | quote }}
+  RABBITMQ_STOMP_PORT: "61613"
+  RABBITMQ_USER: "badminton"
+  CHAT_BROKER_RELAY: "true"
+
+  # ---- Eureka ----
+  # Giữ dấu "/" cuối đúng như default trong application.yml và docker-compose.app.yml.
+  EUREKA_URL: {{ printf "http://eureka-server.%s.svc.cluster.local:8761/eureka/" .Values.appNamespace | quote }}
+
+  # ---- URL công khai ----
+  # Dùng ở 2 chỗ: link email verify/reset (user-service EmailServiceImpl) VÀ
+  # WebSocketConfig.setAllowedOrigins() của chat-service (validate Origin của WS handshake).
+  FRONTEND_URL: {{ .Values.frontendUrl | quote }}
+
+  # ---- Probe ----
+  # Mở /actuator/health/liveness + /readiness. KHÔNG có biến này thì 2 endpoint trả 404
+  # và pod không bao giờ Ready. 0 dòng code, 0 dòng pom.
+  MANAGEMENT_ENDPOINT_HEALTH_PROBES_ENABLED: "true"
+
+  # ---- Knob nghiệp vụ ----
+  # PAYMENT_EXPIRE_MINUTES bị ép bằng đúng BOOKING_HOLD_MINUTES: hai service comment rõ là
+  # hold window và payment window phải hết hạn cùng lúc.
+  BOOKING_HOLD_MINUTES: {{ .Values.booking.holdMinutes | quote }}
+  BOOKING_MAX_HOLD_MINUTES: {{ .Values.booking.maxHoldMinutes | quote }}
+  PAYMENT_EXPIRE_MINUTES: {{ .Values.booking.holdMinutes | quote }}
+
+  # ---- JWT (chỉ TTL; JWT_SECRET là secret) ----
+  JWT_ACCESS_EXPIRATION_MS: {{ .Values.jwt.accessExpirationMs | quote }}
+  JWT_REFRESH_EXPIRATION_MS: {{ .Values.jwt.refreshExpirationMs | quote }}
+
+  # ---- SendGrid (chỉ phần non-secret; SENDGRID_API_KEY là secret) ----
+  SENDGRID_FROM_EMAIL: {{ .Values.sendgrid.fromEmail | quote }}
+  SENDGRID_FROM_NAME: {{ .Values.sendgrid.fromName | quote }}
+
+  {{- if .Values.springProfilesActive }}
+  SPRING_PROFILES_ACTIVE: {{ .Values.springProfilesActive | quote }}
+  {{- end }}
+  {{- range $k, $v := .Values.extraConfig }}
+  {{ $k }}: {{ $v | quote }}
+  {{- end }}

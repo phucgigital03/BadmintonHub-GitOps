@@ -1,0 +1,6 @@
+apiVersion: v2
+name: platform
+description: Object dùng chung một namespace app — ConfigMap app-config (Day 2), Ingress ALB (Day 4), ExternalSecret (Day 6)
+type: application
+version: 0.1.0
+appVersion: "1.0.0"
