@@ -3,6 +3,8 @@
 Repo **desired-state (GitOps)** cho nền tảng BadmintonHub. **KHÔNG chứa source code ứng dụng** — chỉ Helm chart, values theo môi trường, ArgoCD Application, ExternalSecret. ArgoCD trong cụm EKS **watch repo này** và sync cụm về đúng trạng thái khai báo ở đây.
 
 > Repo app (source Java/React, Dockerfile, Terraform, CI) = **`badmintonHub`** (folder sibling).
+> ⚠️ Cần dữ kiện thuộc repo app (Day 1/3/5 đã ra gì · tên biến env · ECR repo URL · output Terraform):
+> **hỏi user** — user đã handoff đủ ở `../badmintonHub/CLAUDE.md`. Đừng copy/snapshot sang repo này.
 > Kế hoạch đầy đủ + lộ trình 7 ngày (+ Day 8 gắn domain) + prompt paste-ready mỗi Day: xem **`Planning_CICD.md`**.
 > Bức tranh tổng quát hệ thống (hạ tầng AWS · 1 ALB 2 namespace · secret/storage · vòng đời request & buổi demo): xem **[`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md)**.
 > Thao tác tay phải tự làm (AWS Console · GitHub · third-party API key · 22 SSM param) + bản đồ verify Console theo Day: xem **[`docs/MANUAL-SETUP.md`](docs/MANUAL-SETUP.md)**.
