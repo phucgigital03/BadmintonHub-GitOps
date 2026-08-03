@@ -41,6 +41,40 @@ Phiên này chứng minh quyết định đó đúng: **13 chỗ sai** đã bị
 | [`values/`](../values/) | **27 file** `<service>-<môi-trường>.yaml` | 9 service × 3 môi trường (`dev` trên kind, `staging` + `prod` trên EKS) |
 | [`scripts/`](../scripts/) | 4 script: `kind-up` · `kind-secret` · `kind-deploy` · `kind-verify` | Dựng cụm, nạp mật khẩu, deploy, và kiểm các bẫy đã biết |
 
+### Bản đồ cụm — dựng xong thì trông thế này
+
+```mermaid
+flowchart TB
+  subgraph NODE["🖥️ Node · badminton-dev-control-plane — 5.78 GB RAM · 8 CPU"]
+    subgraph DEV["Namespace: dev — ứng dụng"]
+      EU["eureka-server<br/>:8761"]
+      GW["api-gateway<br/>:3000"]
+      APP["user :3001 · court :3002 · booking :3003<br/>payment :3006 · escrow :3007<br/>chat :3011 · frontend :80"]
+      CM["ConfigMap app-config<br/>22 biến"]
+      SEC["Secret app-secrets<br/>11 khoá"]
+    end
+    subgraph DATA["Namespace: data-dev — dữ liệu"]
+      PG["postgresql :5432<br/>1 máy chủ / 5 database"]
+      RD["redis-master :6379"]
+      KF["kafka :9092"]
+      MG["mongodb :27017"]
+      RM["rabbitmq :5672 và :61613"]
+    end
+  end
+  GW --> EU
+  CM -.->|envFrom| APP
+  SEC -.->|envFrom| APP
+  APP -->|"postgresql.data-dev.svc.cluster.local:5432"| PG
+  APP --> RD
+  APP --> KF
+```
+
+**Node** là một cái **máy**. Với kind, cả cụm nằm gọn trong *một* container Docker đóng vai máy đó — nên mọi pod đều chia nhau đúng 5.78 GB. Trên EKS thì khác: nhiều node, mỗi node một máy ảo EC2, và pod được rải ra.
+
+**Namespace** chia tài nguyên thành nhóm, như thư mục. Tách 2 namespace để **xoá riêng được**: runbook dọn cụm xoá `PVC` trong `data-dev`, nếu app nằm chung thì lệnh xoá hàng loạt rất dễ trúng nhầm.
+
+Địa chỉ gọi liên namespace theo công thức *tên-Service* **.** *tên-namespace* **.** `svc.cluster.local`.
+
 ### Vì sao **một** chart cho cả 9 service?
 
 Đây là quyết định quan trọng nhất về cấu trúc, và lý do nằm ở **Day 6**.
@@ -130,6 +164,19 @@ Từ 2025, Bitnami chuyển image miễn phí sang `bitnamilegacy` và thêm bư
 #### B4. NetworkPolicy mặc định nuốt cổng phụ ← *bẫy tinh vi nhất*
 
 Chart Bitnami tự tạo một **NetworkPolicy** (tường lửa giữa các pod) chỉ liệt kê các cổng nó biết: `4369, 5672, 5671, 25672, 15672`. Cổng **61613** (STOMP, dùng cho chat) không có trong đó.
+
+```mermaid
+flowchart LR
+  CHAT["Pod chat-service<br/>namespace dev"]
+  NP{{"NetworkPolicy rabbitmq<br/>cho phép: 4369 · 5672 · 5671 · 25672 · 15672<br/>❌ THIẾU 61613"}}
+  RMQ["Pod rabbitmq<br/>namespace data-dev<br/>đang nghe CẢ 5672 lẫn 61613"]
+  CHAT -->|"5672 · AMQP"| NP
+  CHAT -->|"61613 · STOMP"| NP
+  NP -->|"✅ cho qua"| RMQ
+  NP -.->|"⛔ nuốt gói tin → timeout"| RMQ
+  linkStyle 2 stroke:#1A7A57,stroke-width:2px
+  linkStyle 3 stroke:#AC2F2A,stroke-width:2px
+```
 
 Điều làm bẫy này khó chịu là **mọi dấu hiệu bề mặt đều xanh**:
 
@@ -328,6 +375,7 @@ Sau khi sửa hai bug: **3 service sẵn sàng trong dưới 60 giây**, load av
 
 | Khái niệm | Hiểu đơn giản | Gặp ở đâu trong phiên này |
 |---|---|---|
+| **Node** | Một cái **máy** — nơi cắm CPU/RAM/đĩa cho pod chạy | kind chỉ có **1 node**: `badminton-dev-control-plane` |
 | **Pod** | Đơn vị nhỏ nhất K8s chạy, thường là 1 container | Thứ ta nhìn suốt buổi qua `kubectl get pods` |
 | **Deployment** | "Tôi muốn luôn có N bản pod này chạy" | Mỗi service là một Deployment |
 | **ReplicaSet** | Deployment tạo ra nó để giữ đúng số lượng pod | Đổi cấu hình → RS mới sinh ra, RS cũ về 0 |
@@ -338,6 +386,48 @@ Sau khi sửa hai bug: **3 service sẵn sàng trong dưới 60 giây**, load av
 | **StatefulSet** | Như Deployment nhưng cho thứ **có dữ liệu** | 5 datastore dùng nó |
 | **PVC** | Đơn xin cấp ổ đĩa | Postgres/Kafka cần lưu dữ liệu |
 | **NetworkPolicy** | Tường lửa giữa các pod | 🔴 Nó chặn cổng 61613 làm chat chết (B4) |
+
+#### Ai tạo ra ai
+
+Bạn chỉ khai báo **Deployment**. Hai tầng dưới do Kubernetes tự sinh — đó là lý do tên pod trông như dãy ký tự ngẫu nhiên.
+
+```mermaid
+flowchart TB
+  D["Deployment · BẠN khai báo<br/><b>user-service</b>"]
+  R["ReplicaSet · K8s tự tạo<br/><b>user-service-6cc6c966b5</b><br/>mã băm của BẢN CẤU HÌNH"]
+  P["Pod · K8s tự tạo<br/><b>user-service-6cc6c966b5-7pnsj</b><br/>mã băm của TỪNG BẢN chạy"]
+  D -->|tạo ra| R -->|tạo ra| P
+```
+
+Đọc tên pod ngược từ phải sang: `7pnsj` là bản chạy cụ thể, `6cc6c966b5` là phiên bản cấu hình, `user-service` là Deployment.
+
+Đổi cấu hình → Kubernetes sinh ReplicaSet **mới**, đưa RS cũ về 0 pod. Bạn đã thấy đúng hiện tượng này mỗi lần tôi sửa probe: `kubectl get rs` hiện nhiều dòng, chỉ một dòng có `DESIRED 1`.
+
+#### Service: cái tên không bao giờ đổi
+
+Pod chết và sinh lại liên tục, mỗi lần một IP khác. Không ai gọi được một thứ như thế. Service là lớp tên cố định đứng trước, che đi sự thay đổi đó.
+
+```mermaid
+flowchart LR
+  C["Pod api-gateway<br/>gọi theo TÊN"] --> S["Service <b>user-service</b><br/>tên + IP ảo · KHÔNG BAO GIỜ đổi"]
+  S --> P1["Pod 10.244.0.20"]
+  P1 -.->|restart| P2["Pod 10.244.0.35<br/>IP đã đổi"]
+  S -.->|"tự cập nhật"| P2
+```
+
+#### ConfigMap và Secret bơm biến vào Pod
+
+Cùng một image chạy được ở dev, staging và prod — khác nhau chỉ ở đống biến môi trường bơm vào lúc container khởi động.
+
+```mermaid
+flowchart LR
+  CM["ConfigMap <b>app-config</b><br/>REDIS_HOST · EUREKA_URL<br/>BOOKING_HOLD_MINUTES …"] -->|envFrom| POD["Pod <b>user-service</b><br/>nhận 33 biến"]
+  SEC["Secret <b>app-secrets</b><br/>JWT_SECRET · POSTGRES_PASSWORD …"] -->|envFrom| POD
+```
+
+Secret **không** được mã hoá — nó chỉ mã hoá base64 và tách quyền truy cập riêng. Giá trị thật không bao giờ nằm trong Git: Day 6 sẽ kéo chúng từ AWS SSM.
+
+> ⚠️ **Rất dễ quên:** sửa ConfigMap **không** làm pod khởi động lại — biến môi trường chỉ đọc một lần lúc container start. ArgoCD sẽ báo "đã đồng bộ" trong khi pod vẫn chạy giá trị cũ. Sau khi đổi phải chạy `kubectl rollout restart deploy`.
 
 **🔴 Bẫy tên Service — đáng hiểu kỹ**
 
@@ -367,27 +457,272 @@ Các thông số cần khai tường minh:
 | `failureThreshold` (startup) | 3 | Quá ít cho JVM — một Spring context mất ~125 giây để khởi tạo |
 | `failureThreshold` (liveness) | 3 (=30 giây) | Quá nhạy — một đợt dọn rác dài cũng đủ gây restart oan |
 
+#### "Rút khỏi Service, không giết" nghĩa là gì?
+
+Mỗi Service giữ một **danh sách IP của các pod đang sẵn sàng**. Readiness probe chính là thứ quyết định pod có tên trong danh sách đó — nó *không* động gì tới tiến trình đang chạy.
+
+```mermaid
+flowchart TB
+  subgraph OK["Redis khoẻ — readiness xanh"]
+    S1["Service user-service"] --> E1["danh sách: 10.244.0.20 ✅<br/><br/>Pod: READY 1/1<br/>RESTARTS đứng yên"]
+  end
+  subgraph BAD["Redis chết — readiness đỏ"]
+    S2["Service user-service"] --> E2["danh sách: RỖNG ⛔<br/>IP bị rút ra<br/><br/>Pod: READY 0/1 nhưng VẪN Running<br/>RESTARTS VẪN đứng yên"]
+  end
+```
+
+Ví như một quầy thu ngân:
+
+| | Readiness fail | Liveness fail |
+|---|---|---|
+| Ví như | Nhân viên treo biển **"tạm nghỉ"** | Quản lý **cho nghỉ việc**, gọi người mới |
+| Tiến trình Java | vẫn sống | **bị giết** |
+| Request đang dở | phục vụ xong | mất |
+| Thời gian hồi phục | **vài giây** | **~2 phút** (JVM khởi động lại) |
+| Cột `RESTARTS` | không đổi | tăng thêm 1 |
+
+Bạn đã nhìn thấy nó: lúc hạ Redis về 0, pod hiện `Running` nhưng `0/1`, và `RESTARTS` không nhúc nhích.
+
+> ⚠️ Readiness fail **không hề miễn phí**. Với 1 bản sao, pod bị rút ra nghĩa là danh sách **rỗng** — không còn ai phục vụ, client sẽ lỗi. Nó chỉ **ít tàn phá hơn** restart rất nhiều: hồi phục tính bằng giây thay vì phút, và không kéo theo dây chuyền cả cụm cùng khởi động lại.
+
 ### Tầng 3 — Tài nguyên
 
 - **`requests`** = xin tối thiểu. K8s dùng con số này để **chọn máy** xếp pod vào
 - **`limits`** = trần. Vượt bộ nhớ → **bị giết** (`OOMKilled`). Vượt CPU → **bị làm chậm** (không bị giết)
 
+#### `limits` là của MỘT container, không phải của máy
+
+Đây là chỗ dễ nhầm nhất. Có **4 tầng lồng nhau**, mỗi tầng một giới hạn riêng:
+
+```mermaid
+flowchart TB
+  subgraph MAC["💻 MacBook — 8 GB (macOS cũng đang dùng một phần)"]
+    subgraph DOCK["🐳 Docker Desktop được cấp — 5.78 GB"]
+      subgraph KNODE["Node kind — MỘT container Docker chứa cả cụm"]
+        P1["pod user-service<br/>limit 640Mi"]
+        P2["pod api-gateway<br/>limit 640Mi"]
+        P3["pod postgresql<br/>limit 384Mi"]
+        P4["… 5 datastore<br/>+ Kubernetes tự dùng ~600Mi"]
+      end
+    end
+  end
+```
+
+`640Mi` là trần của **riêng pod đó**. Máy còn trống bao nhiêu không liên quan — vượt trần của chính nó là bị giết. Nhưng **tổng** tất cả pod phải vừa trong node:
+
+```
+9 service × 640Mi                          = 5.76 GB
+node chỉ có                                  5.78 GB
+còn lại cho 5 database + Kubernetes        ≈   20 MB   ← không thể
+```
+
+Thực tế chạy ổn định được khoảng **6 service**. Lúc dựng đủ 9, node còn 95 MB trống rồi 6 pod chết cùng lúc.
+
+#### Hai kiểu "hết bộ nhớ" — phiên này gặp cả hai
+
+| | Container vượt limit của **chính nó** | **Node** hết RAM |
+|---|---|---|
+| Thấy gì | `Reason: OOMKilled` | `Reason: Error` · `exit=137` |
+| Bao nhiêu pod chết | **một** pod | **nhiều** pod cùng lúc |
+| Máy còn RAM không | có thể còn nhiều | không |
+| Sửa ở đâu | tăng `limits` của pod đó | giảm số pod, hoặc cấp thêm RAM cho Docker |
+| Trong phiên này | `user-service` và `chat-service` chết riêng lẻ dù node còn 2.5 GB | dựng đủ 9 service → 6 pod chết trong vòng 7 giây |
+
+> **Mẹo nhận ra trong 10 giây:** nhìn **dấu thời gian** trong cột `RESTARTS`. Restart rải rác → mỗi pod một lý do riêng, đọc log từng cái. Restart **chụm vào cùng một thời điểm** → đi kiểm node trước, đừng phí thời gian đọc log từng service.
+
 Với Java, nhớ thêm phần non-heap 150–200MB (xem C4).
 
 ### Tầng 4 — Helm
 
-| Khái niệm | Ý nghĩa |
-|---|---|
-| **Chart** | Một gói khuôn mẫu YAML |
-| **Values** | Bộ giá trị điền vào khuôn |
-| **Template** | File YAML có chỗ trống: `port: {{ .Values.port }}` |
-| **Umbrella chart** | Chart gói nhiều chart con — [`infra/`](../infra/) gói 5 datastore |
-| `helm lint` | Kiểm cú pháp |
-| `helm template` | **Xem trước** YAML sinh ra mà **không** deploy |
+#### Vấn đề Helm sinh ra để giải quyết
 
-⚠️ **Helm không kiểm tra bạn viết đúng tên tuỳ chọn hay không.** Gõ sai tên → bỏ qua im lặng. Đây là nguồn gốc của bug B1.
+Kubernetes chỉ nhận YAML thuần. Không có Helm thì repo này phải viết tay:
 
-Trong umbrella chart, mỗi chart con **bắt buộc** khai `fullnameOverride`, nếu không tên bị thêm tiền tố (`infra-postgresql` thay vì `postgresql`) và mọi địa chỉ trong ConfigMap sẽ sai.
+```
+9 service × 3 môi trường × 2 loại object (Deployment + Service) = 54 file YAML
+```
+
+Và 54 file đó **giống nhau tới ~95%** — chỉ khác vài chỗ: tên, cổng, image tag, giới hạn RAM. Muốn sửa cách khai probe? Sửa 54 chỗ. Quên một chỗ → bug ẩn, và bạn sẽ không biết cho tới khi nó nổ.
+
+Helm cho phép viết **1 khuôn + 27 bộ giá trị**.
+
+#### Khái niệm 1 — Chart là một **thư mục**, không phải file
+
+Helm bắt buộc đúng ba thành phần:
+
+```
+charts/service/
+├── Chart.yaml          ← thẻ tên: chart tên gì, phiên bản bao nhiêu
+├── values.yaml         ← GIÁ TRỊ MẶC ĐỊNH
+└── templates/          ← các khuôn YAML
+    ├── deployment.yaml
+    ├── service.yaml
+    └── _helpers.tpl    ← tên bắt đầu bằng "_" : hàm dùng chung, KHÔNG sinh object
+```
+
+Repo này có **3 chart**:
+
+| Chart | Sinh ra gì | Dùng cho |
+|---|---|---|
+| [`charts/service/`](../charts/service/) | Deployment + Service | cả 9 service, mỗi lần cài một cái |
+| [`charts/platform/`](../charts/platform/) | ConfigMap `app-config` | 1 lần / namespace |
+| [`infra/`](../infra/) | 5 datastore | 1 lần / namespace `data-<env>` |
+
+#### Khái niệm 2 — Template = YAML có chỗ trống
+
+[`charts/service/templates/service.yaml`](../charts/service/templates/service.yaml) **không phải** YAML hoàn chỉnh — chỗ nào cần khác nhau giữa các service thì để trống:
+
+```yaml
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "service.name" . }}     # ← chỗ trống
+spec:
+  type: {{ .Values.service.type }}         # ← chỗ trống
+  ports:
+    - name: http
+      port: {{ .Values.port }}             # ← chỗ trống
+      protocol: TCP
+```
+
+Phần không có `{{ }}` (`apiVersion`, `kind: Service`, `protocol: TCP`) là **cố định** — mọi service giống nhau ở đó.
+
+```mermaid
+flowchart LR
+  T["📄 <b>Template</b><br/>service.yaml<br/>có chỗ trống<br/>port: ⟨.Values.port⟩"]
+  V1["📋 values/<b>user-service</b>-dev.yaml<br/>nameOverride: user-service<br/>port: 3001"]
+  V2["📋 values/<b>frontend</b>-dev.yaml<br/>nameOverride: frontend<br/>port: 80"]
+  O1["✅ YAML thật<br/>name: user-service<br/>port: 3001"]
+  O2["✅ YAML thật<br/>name: frontend<br/>port: 80"]
+  V1 --> T
+  V2 --> T
+  T -->|helm template| O1
+  T -->|helm template| O2
+```
+
+**Đó là toàn bộ ý tưởng của Helm.** Một template + 9 bộ values = 9 file YAML khác nhau. Không có Helm thì bạn phải nuôi 9 file gần-giống-hệt-nhau, và sửa một chỗ chung là sửa 9 lần.
+
+Chỗ trống còn có loại **có điều kiện** — quyết định *có in ra hay không*:
+
+```yaml
+{{- if or .Values.envFrom.configMap .Values.envFrom.secret }}
+envFrom:
+  - configMapRef:
+      name: {{ .Values.envFrom.configMap }}
+{{- end }}
+```
+
+Kết quả thật: `user-service` sinh ra 5 dòng `envFrom`, còn `frontend` sinh ra **0 dòng** — không phải `envFrom` rỗng, mà là chữ `envFrom` **hoàn toàn không xuất hiện**. Đó là lý do một chart dùng được cho cả service Java (cần biến môi trường) lẫn nginx (không cần gì).
+
+#### Khái niệm 3 — Values có **3 tầng chồng lên nhau**
+
+Đây là chỗ hay nhầm nhất: giá trị **không** đến từ một nơi duy nhất. Tầng sau ghi đè tầng trước.
+
+```mermaid
+flowchart TB
+  L1["<b>Tầng 1 · mặc định của chart</b><br/>charts/service/values.yaml<br/>port = <b>8080</b>"]
+  L2["<b>Tầng 2 · file values</b> — cờ -f<br/>values/user-service-dev.yaml<br/>port = <b>3001</b>"]
+  L3["<b>Tầng 3 · dòng lệnh</b> — cờ --set<br/>ít dùng, chỉ để thử nhanh<br/>(ở đây không đặt gì)"]
+  R["🎯 <b>Kết quả cuối</b><br/>port = <b>3001</b>"]
+  L1 -->|bị ghi đè bởi| L2 -->|bị ghi đè bởi| L3 --> R
+```
+
+Hệ quả quan trọng: **tầng dưới chỉ cần khai những thứ nó muốn ĐỔI.**
+
+Đó là lý do [`values/user-service-dev.yaml`](../values/user-service-dev.yaml) chỉ dài ~40 dòng — mọi thứ không nhắc tới đều lấy mặc định từ [`charts/service/values.yaml`](../charts/service/values.yaml). Mỗi dòng trong file values là một chỗ trống được điền:
+
+```yaml
+nameOverride: user-service            → tên Service (bắt buộc, xem §Bẫy tên Service)
+port: 3001                            → cổng
+image.repository: badmintonhub/user-service
+livenessPath: /actuator/info
+resources.limits.memory: 640Mi
+```
+
+#### Khái niệm 4 — Ba lệnh, chỉ **một** cái đụng tới cụm
+
+| Lệnh | Làm gì | Có đụng cụm? |
+|---|---|:--:|
+| `helm lint` | Kiểm cú pháp chart | ❌ |
+| `helm template` | **In ra** YAML sẽ sinh, để mắt người đọc | ❌ |
+| `helm install` / `helm upgrade` | Sinh YAML **rồi gửi cho Kubernetes** | ✅ |
+
+Cả Day 2 chạy `helm template` hàng chục lần trước khi `install` một lần. Đây cũng chính là cách bắt lỗi **mà không tốn tiền EKS**.
+
+Thử ngay để thấy tận mắt — cùng một chart, đổi file values:
+
+```bash
+helm template demo charts/service -f values/user-service-dev.yaml -s templates/service.yaml
+#   name: user-service        port: 3001
+
+helm template demo charts/service -f values/frontend-dev.yaml     -s templates/service.yaml
+#   name: frontend            port: 80
+```
+
+Chỗ trống `{{ .Values.port }}` đã thành `3001` và `80`. Đó là toàn bộ ý tưởng của Helm, nhìn thấy được trong 2 lệnh.
+
+#### Khái niệm 5 — Umbrella chart = chart **gói** chart khác
+
+[`infra/Chart.yaml`](../infra/Chart.yaml) không tự viết template nào cho 5 datastore. Nó chỉ **khai báo phụ thuộc**:
+
+```yaml
+dependencies:
+  - name: postgresql
+    version: 16.7.27                                  # ← GHIM phiên bản
+    repository: https://charts.bitnami.com/bitnami
+    condition: postgresql.enabled                     # ← công tắc bật/tắt
+```
+
+Chạy `helm dependency build` → Helm tải 5 chart về `infra/charts/*.tgz`. Từ đó `helm install infra` cài luôn cả 5.
+
+Ba điều cần nhớ:
+
+**① `condition` cho phép bật/tắt từng chart con bằng values.** Đây chính là cách xử lý bug B2 (MongoDB chỉ có bản Intel): `dev` tắt `mongodb.enabled` và bật `mongodbOss.enabled` (template tự viết, dùng image `mongo:8.0` chạy được cả ARM), còn `staging`/`prod` thì ngược lại.
+
+**② Values của chart con nằm lồng dưới tên nó:**
+
+```yaml
+# infra/values.yaml
+redis:                      # ← tên chart con
+  auth:
+    enabled: false          # ← đây là values CỦA chart redis, không phải của infra
+kafka:
+  controller:
+    replicaCount: 1
+```
+
+**③ Mỗi chart con bắt buộc khai `fullnameOverride`.** Không khai thì Helm thêm tiền tố tên bản cài vào — Service thành `infra-postgresql` thay vì `postgresql`, và mọi địa chỉ trong ConfigMap sẽ trỏ sai. Đây đúng là **cùng một loại bẫy** với §Bẫy tên Service ở trên: tên object bị đổi trong im lặng, không có gì báo lỗi.
+
+#### ⚠️ Helm bỏ qua tên sai **trong im lặng**
+
+Gõ sai tên tuỳ chọn — `portt` thay vì `port` — rồi so kết quả:
+
+```bash
+diff <(helm template t charts/service -f values/user-service-dev.yaml -s templates/service.yaml) \
+     <(helm template t charts/service -f values/user-service-dev.yaml -s templates/service.yaml --set portt=9999)
+# → KHÔNG khác gì cả. Không lỗi, không cảnh báo.
+
+helm template t charts/service -f values/user-service-dev.yaml -s templates/service.yaml --set port=9999 | grep 'port:'
+# →       port: 9999          ← gõ đúng tên thì mới có tác dụng
+```
+
+Helm chỉ điền vào **những chỗ trống mà template có**. Đưa một cái tên template không đọc tới, nó lặng lẽ bỏ qua.
+
+Cạm bẫy nằm ở đó: `helm lint` xanh, `helm template` xanh, deploy thành công, pod lên — mà tuỳ chọn bạn tưởng đã đặt thì **chưa bao giờ có tác dụng**. Đây chính là bug B1.
+
+**Cách tự bảo vệ:** đừng tin YAML đã render — kiểm ở **cấu hình thật bên trong container**. Xem [`scripts/kind-verify.sh`](../scripts/kind-verify.sh): nó không đọc YAML mà `exec` vào broker để đọc file `server.properties`.
+
+#### Tóm tắt Tầng 4
+
+| Khái niệm | Ý nghĩa | Ở repo này là |
+|---|---|---|
+| **Chart** | **Thư mục** có `Chart.yaml` + `values.yaml` + `templates/` | `charts/service` · `charts/platform` · `infra` |
+| **Template** | File YAML có `{{ }}`, Helm điền trước khi gửi K8s | `charts/service/templates/*.yaml` |
+| **Values** | Giá trị điền vào — **3 tầng chồng nhau** | `charts/service/values.yaml` ← `values/<svc>-<env>.yaml` |
+| **`_helpers.tpl`** | Hàm dùng chung, **không** sinh object | Nơi chặn §Bẫy tên Service bằng `required` |
+| **Umbrella chart** | Chart khai chart con qua `dependencies` | `infra/` gói 5 datastore Bitnami |
+| **`helm template`** | Xem trước YAML, **không** đụng cụm | Cách bắt lỗi miễn phí trước khi trả tiền EKS |
+| **⚠️ Tên values sai** | Helm **bỏ qua im lặng**, mọi thứ vẫn xanh | Verify ở kết quả thật, không ở file values |
 
 ### Tầng 5 — Kỹ năng gỡ lỗi
 
