@@ -11,11 +11,12 @@
 nameOverride: api-gateway
 
 image:
-  repository: <ACCOUNT_ID>.dkr.ecr.ap-southeast-1.amazonaws.com/api-gateway
-  # TODO(Day 4): thay <ACCOUNT_ID> bằng account thật và tag bằng git SHA đã build.
-  # ECR chưa tồn tại đến Day 3 nên Day 2 để placeholder. PHẢI điền xong TRƯỚC khi
-  # cài ArgoCD ở Day 6, vì ApplicationSet sinh app prod ngay từ đầu.
-  tag: PLACEHOLDER-DAY4
+  repository: 547602846935.dkr.ecr.ap-southeast-1.amazonaws.com/api-gateway
+  # tag = git SHA của repo app badmintonHub — commit chứa patch WebSocketConfig
+  # (setAllowedOriginPatterns) + FE same-origin. Bất biến, KHÔNG bao giờ dùng `latest`:
+  # tag cố định mới truy được cụm đang chạy code nào và rollback mới có nghĩa.
+  # Day 5: CI tự bump dòng này khi merge main. Promote prod = PR đổi sang SHA đã verify ở staging.
+  tag: 5a7067c
   pullPolicy: IfNotPresent
 
 strategy: RollingUpdate
@@ -24,6 +25,17 @@ port: 3000
 livenessPath: /actuator/info
 readinessPath: /actuator/health
 startupFailureThreshold: 60
+
+# 🔴 Day 4 — ALB tự probe target group. Mặc định probe "/", mà Spring Cloud Gateway trả 404
+# ở "/" → mọi target unhealthy → `/api` trả 502 dù pod xanh. Dùng /actuator/info (không chạm
+# datastore) vì readiness của K8s đã gác composite /actuator/health rồi — xem giải thích đầy
+# đủ ở values/api-gateway-staging.yaml.
+# ⚠️ Ingress của ns prod đang enabled: false tới Day 8 (xem infra/values/platform-prod.yaml),
+# nhưng annotation cứ để sẵn: hôm bật host là đúng ngay, không phải nhớ thêm một việc.
+service:
+  annotations:
+    alb.ingress.kubernetes.io/healthcheck-path: /actuator/info
+    alb.ingress.kubernetes.io/success-codes: "200"
 
 envFrom:
   configMap: app-config

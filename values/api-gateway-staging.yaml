@@ -11,11 +11,12 @@
 nameOverride: api-gateway
 
 image:
-  repository: <ACCOUNT_ID>.dkr.ecr.ap-southeast-1.amazonaws.com/api-gateway
-  # TODO(Day 4): thay <ACCOUNT_ID> bằng account thật và tag bằng git SHA đã build.
-  # ECR chưa tồn tại đến Day 3 nên Day 2 để placeholder. PHẢI điền xong TRƯỚC khi
-  # cài ArgoCD ở Day 6, vì ApplicationSet sinh app prod ngay từ đầu.
-  tag: PLACEHOLDER-DAY4
+  repository: 547602846935.dkr.ecr.ap-southeast-1.amazonaws.com/api-gateway
+  # tag = git SHA của repo app badmintonHub — commit chứa patch WebSocketConfig
+  # (setAllowedOriginPatterns) + FE same-origin. Bất biến, KHÔNG bao giờ dùng `latest`:
+  # tag cố định mới truy được cụm đang chạy code nào và rollback mới có nghĩa.
+  # Day 5: CI tự bump dòng này khi merge main. Promote prod = PR đổi sang SHA đã verify ở staging.
+  tag: 5a7067c
   pullPolicy: IfNotPresent
 
 strategy: RollingUpdate
@@ -24,6 +25,20 @@ port: 3000
 livenessPath: /actuator/info
 readinessPath: /actuator/health
 startupFailureThreshold: 60
+
+# 🔴 Day 4 — api-gateway nằm SAU ALB nên có THÊM một tầng health-check nữa: ALB tự probe
+# target group của nó. Mặc định ALB probe path "/", mà Spring Cloud Gateway KHÔNG có route
+# cho "/" → trả 404 → ALB đánh dấu mọi target unhealthy → `/api` trả 502 trong khi
+# `kubectl get pods` xanh 100%. Đây đúng kiểu lỗi "K8s xanh, ALB đỏ" tốn cả buổi để tìm.
+#
+# Vì sao /actuator/info chứ không phải /actuator/health: readiness probe của K8s đã dùng
+# composite /actuator/health rồi, mà pod chưa Ready thì controller KHÔNG đăng ký nó vào target
+# group. Cho ALB dùng composite nữa = một nhịp Redis nhấp nháy bị phạt hai lần (rút khỏi
+# Endpoints VÀ bị ALB đánh unhealthy). /actuator/info không chạm datastore.
+service:
+  annotations:
+    alb.ingress.kubernetes.io/healthcheck-path: /actuator/info
+    alb.ingress.kubernetes.io/success-codes: "200"
 
 envFrom:
   configMap: app-config

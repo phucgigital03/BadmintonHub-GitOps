@@ -11,11 +11,12 @@
 nameOverride: chat-service
 
 image:
-  repository: <ACCOUNT_ID>.dkr.ecr.ap-southeast-1.amazonaws.com/chat-service
-  # TODO(Day 4): thay <ACCOUNT_ID> bằng account thật và tag bằng git SHA đã build.
-  # ECR chưa tồn tại đến Day 3 nên Day 2 để placeholder. PHẢI điền xong TRƯỚC khi
-  # cài ArgoCD ở Day 6, vì ApplicationSet sinh app prod ngay từ đầu.
-  tag: PLACEHOLDER-DAY4
+  repository: 547602846935.dkr.ecr.ap-southeast-1.amazonaws.com/chat-service
+  # tag = git SHA của repo app badmintonHub — commit chứa patch WebSocketConfig
+  # (setAllowedOriginPatterns) + FE same-origin. Bất biến, KHÔNG bao giờ dùng `latest`:
+  # tag cố định mới truy được cụm đang chạy code nào và rollback mới có nghĩa.
+  # Day 5: CI tự bump dòng này khi merge main. Promote prod = PR đổi sang SHA đã verify ở staging.
+  tag: 5a7067c
   pullPolicy: IfNotPresent
 
 strategy: RollingUpdate
@@ -35,6 +36,20 @@ envFrom:
 # vì nâng limit thì 8 JVM không còn vừa RAM node.
 env:
   JAVA_TOOL_OPTIONS: "-XX:MaxRAMPercentage=70 -XX:+UseContainerSupport"
+
+  # 🔴 GHI ĐÈ app-config CHỈ CHO SERVICE NÀY — bỏ dòng này là WS handshake 403.
+  # Giải thích đầy đủ chuỗi nhân quả ở values/chat-service-staging.yaml. Tóm tắt:
+  # image vốn default "*" (`${FRONTEND_URL:*}`), nhưng charts/platform phát FRONTEND_URL cho
+  # MỌI service vô điều kiện, mà env tường minh thắng default của image → pattern thành
+  # ALB DNS → mọi handshake bị từ chối. Không sửa ở platform values được vì user-service
+  # dựng link email verify/reset từ chính biến đó.
+  #
+  # ⚠️ prod BẮT BUỘC có dòng này dù Day 4 chưa deploy prod: Day 6 ApplicationSet sinh app
+  # prod ngay từ đầu, và bẫy này sẽ chờ sẵn ở đó đúng lúc bạn promote.
+  #
+  # 💡 Day 8: đổi thành "https://prod.badminton.<domain>,https://www.badminton.<domain>"
+  #    (code dùng .split(",") nên nhận nhiều origin) để siết lại đúng origin thật.
+  FRONTEND_URL: "*"
 
 resources:
   requests:

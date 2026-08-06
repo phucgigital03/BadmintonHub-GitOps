@@ -11,11 +11,12 @@
 nameOverride: chat-service
 
 image:
-  repository: <ACCOUNT_ID>.dkr.ecr.ap-southeast-1.amazonaws.com/chat-service
-  # TODO(Day 4): thay <ACCOUNT_ID> bằng account thật và tag bằng git SHA đã build.
-  # ECR chưa tồn tại đến Day 3 nên Day 2 để placeholder. PHẢI điền xong TRƯỚC khi
-  # cài ArgoCD ở Day 6, vì ApplicationSet sinh app prod ngay từ đầu.
-  tag: PLACEHOLDER-DAY4
+  repository: 547602846935.dkr.ecr.ap-southeast-1.amazonaws.com/chat-service
+  # tag = git SHA của repo app badmintonHub — commit chứa patch WebSocketConfig
+  # (setAllowedOriginPatterns) + FE same-origin. Bất biến, KHÔNG bao giờ dùng `latest`:
+  # tag cố định mới truy được cụm đang chạy code nào và rollback mới có nghĩa.
+  # Day 5: CI tự bump dòng này khi merge main. Promote prod = PR đổi sang SHA đã verify ở staging.
+  tag: 5a7067c
   pullPolicy: IfNotPresent
 
 strategy: RollingUpdate
@@ -35,6 +36,34 @@ envFrom:
 # vì nâng limit thì 8 JVM không còn vừa RAM node.
 env:
   JAVA_TOOL_OPTIONS: "-XX:MaxRAMPercentage=70 -XX:+UseContainerSupport"
+
+  # 🔴 GHI ĐÈ app-config CHỈ CHO SERVICE NÀY — bỏ dòng này là WS handshake 403.
+  #
+  # Chuỗi nhân quả (đã đo, đừng rút gọn khi đọc):
+  #   1. chat-service validate Origin của WS handshake bằng
+  #        WebSocketConfig.java:69  setAllowedOriginPatterns(frontendUrl.split(","))
+  #      với  @Value("${app.frontend-url:*}")  và  application.yml: frontend-url: ${FRONTEND_URL:*}
+  #      ⇒ IMAGE VỐN ĐÃ MẶC ĐỊNH "*". Không ai đặt FRONTEND_URL thì chat chạy tốt.
+  #   2. Nhưng charts/platform/templates/configmap.yaml phát FRONTEND_URL cho MỌI service,
+  #      VÔ ĐIỀU KIỆN (user-service cần nó để dựng link email verify/reset).
+  #   3. Env tường minh (envFrom/env) LUÔN thắng default nằm trong image
+  #      ⇒ pattern thành "http://REPLACE-WITH-ALB-DNS" ⇒ mọi handshake bị từ chối.
+  #
+  # Tức là chính ConfigMap của ta vô hiệu hoá cái default đúng sẵn trong image. Nghịch lý:
+  # cả repo app lẫn repo này đều "làm đúng phần mình" mà hệ thống vẫn hỏng.
+  #
+  # Vì sao ghi đè ở ĐÂY chứ không sửa frontendUrl ở infra/values/platform-staging.yaml:
+  # user-service dựng link "${FRONTEND_URL}/verify-email?token=..." từ cùng biến đó
+  # → đặt "*" ở platform là link email thành "*/verify-email?token=..." — hỏng.
+  # `env` của charts/service thắng `envFrom` khi trùng key, nên đây là chỗ đúng để tách.
+  #
+  # Triệu chứng nếu quên: chat chết (403 lúc handshake) trong khi MỌI luồng khác xanh —
+  # pod Ready, Ingress có ADDRESS, /api trả 200. Rất khó truy.
+  #
+  # 💡 Day 8 (có domain): code dùng .split(",") nên nhận NHIỀU origin, đổi thành
+  #      FRONTEND_URL: "https://staging.badminton.<domain>,https://www.badminton.<domain>"
+  #    là siết lại được đúng origin thật mà KHÔNG phải sửa code lần nữa.
+  FRONTEND_URL: "*"
 
 resources:
   requests:
