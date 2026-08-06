@@ -15,7 +15,10 @@ set -a; . ./.env; set +a
 : "${POSTGRES_PASSWORD:?POSTGRES_PASSWORD không được rỗng}"
 : "${RABBITMQ_PASS:?RABBITMQ_PASS không được rỗng}"
 
-MONGO_ROOT_PASSWORD="$(printf '%s' "${MONGODB_CHAT_URI:-}" | sed -n 's#^mongodb://[^:]*:\([^@]*\)@.*#\1#p')"
+# ⚠️ Neo vào dấu @ CUỐI CÙNG. `[^@]*` sẽ cắt cụt password có chứa '@' (rất dễ gặp với
+# `openssl rand -base64 24`) → Secret sai giá trị mà triệu chứng lại là "Mongo auth fail",
+# dẫn bạn đi soi authSource thay vì soi regex. Cùng lỗi này đã sửa ở scripts/eks-secret.sh.
+MONGO_ROOT_PASSWORD="$(printf '%s' "${MONGODB_CHAT_URI:-}" | sed -n 's#^mongodb://[^:]*:\(.*\)@[^@]*$#\1#p')"
 [ -n "$MONGO_ROOT_PASSWORD" ] || { echo "❌ Không tách được password từ MONGODB_CHAT_URI"; exit 1; }
 case "$MONGODB_CHAT_URI" in
   *"?authSource=admin"*) ;;
