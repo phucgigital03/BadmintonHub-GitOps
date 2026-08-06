@@ -165,24 +165,21 @@ Day 6 ArgoCD đặt release name = `<svc>-<env>` (vd `user-service-staging`). N�
 
 ### 🔄 Đang làm / còn dở
 
-- 🔴 **34 file thay đổi CHƯA COMMIT** (30 `M` + 4 `??`: `charts/platform/templates/ingress.yaml`, `docs/DAY4-EXPLAINED.md`, `scripts/eks-{secret,deploy}.sh`). Commit gần nhất vẫn là `ec61e3c` của Day 2.
-- ⚠️ **Tag image đang LỆCH — có chủ đích, đừng "sửa" nhầm**:
+- ✅ Day 4 **đã commit đủ** — 5 commit: `dd9ff9b` ingress · `5c0d45e` values · `1770124` scripts · `18a77b5` docs/handoff · `358faf8` promote frontend prod. Working tree **sạch**, **chưa push** (`main` ahead 6 so với `origin/main`).
+- ⚠️ **Tag image LỆCH giữa các service — bình thường trong GitOps, đừng "sửa" cho đều**:
 
   | Values | Tag | Vì sao |
   |---|---|---|
   | 8 service Java (staging + prod) | `5a7067c` | lần build đầu, đã gồm patch `WebSocketConfig` + FE same-origin |
-  | `frontend-staging.yaml` | **`59bf4c6`** | build lại **chỉ mình frontend** để fix `crypto.randomUUID` (secure context) |
-  | `frontend-prod.yaml` | `5a7067c` | **chưa promote** — thiếu fix uuid |
+  | `frontend-{staging,prod}.yaml` | **`59bf4c6`** | build lại **chỉ mình frontend** để fix `crypto.randomUUID` (secure context); prod đã promote sang cùng SHA |
 
-  Lệch tag giữa các service là **bình thường** trong GitOps (mỗi service một vòng đời). Nhưng `frontend-prod` **cần promote lên `59bf4c6`** (PR đổi tag, không build lại) trước khi bật prod ở Day 6, nếu không prod sẽ dính lại đúng bug đã sửa.
-- Trên ECR hiện có: 8 repo Java chỉ có `5a7067c`; repo `frontend` có **cả `5a7067c` và `59bf4c6`**.
+  Mỗi service có vòng đời riêng nên tag khác nhau là đúng — **KHÔNG** build lại 8 service Java chỉ để cho tag bằng nhau. Trên ECR: 8 repo Java chỉ có `5a7067c`; repo `frontend` có **cả `5a7067c` và `59bf4c6`**.
 
 ### 📋 Việc tiếp theo (theo thứ tự ưu tiên)
-1. **Commit 34 file Day 4** (user tự commit — quy ước repo này).
-2. **Promote `frontend-prod.yaml` → `59bf4c6`** (1 dòng, không build lại).
-3. **Day 5 — CI/CD**: mở Claude Code ở **`../badmintonHub` (app repo)**, dùng **📋 Prompt paste-ready — Day 5** trong `Planning_CICD.md`. **Không làm ở repo này.**
-4. **Day 6** (repo này): `apps/` ApplicationSet + cài ArgoCD + chuyển `scripts/eks-secret.sh` → `ExternalSecret` (ESO + ClusterSecretStore **đã cài sẵn và `Valid`** từ `bootstrap.sh` của Day 3 ⇒ rủi ro Day 6 giảm hẳn).
-5. Day 7 (observability + teardown) → Day 8 (domain + HTTPS, cả 2 repo).
+1. **Push `main`** lên `origin` (6 commit đang chờ) — hoặc để đó nếu muốn xem lại trước.
+2. **Day 5 — CI/CD**: mở Claude Code ở **`../badmintonHub` (app repo)**, dùng **📋 Prompt paste-ready — Day 5** trong `Planning_CICD.md`. **Không làm ở repo này.**
+3. **Day 6** (repo này): `apps/` ApplicationSet + cài ArgoCD + chuyển `scripts/eks-secret.sh` → `ExternalSecret` (ESO + ClusterSecretStore **đã cài sẵn và `Valid`** từ `bootstrap.sh` của Day 3 ⇒ rủi ro Day 6 giảm hẳn). Nhớ **bật `ingress.enabled: true` cho prod chỉ từ Day 8** (xem §Quyết định).
+4. Day 7 (observability + teardown) → Day 8 (domain + HTTPS, cả 2 repo).
 
 **Việc thuộc repo app, ghi lại để không quên** (không chặn Day 5/6):
 - `court-service` `GlobalExceptionHandler` map `HttpRequestMethodNotSupportedException` → **500** thay vì 405.
