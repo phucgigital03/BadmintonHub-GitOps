@@ -5,6 +5,11 @@
 # bắt buộc `kubectl delete pvc --all -n data-prod` KHI CỤM CÒN SỐNG — reclaim policy Delete
 # chỉ chạy lúc PVC bị xoá, destroy thẳng cụm thì không ai gọi nó và volume mồ côi vẫn chảy tiền.
 
+# 🔴 Day 4 — GHIM StorageClass, đừng dựa vào default của cụm (EKS có sẵn gp2, Day 3 thêm gp3;
+# cái nào là default thì tuỳ cách cài add-on). Trật thì ra gp2 mà không có lỗi nào cả.
+global:
+  defaultStorageClass: gp3
+
 mongodb:
   enabled: true
 mongodbOss:

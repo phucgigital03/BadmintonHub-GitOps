@@ -2,19 +2,42 @@
 appNamespace: staging
 dataNamespace: data-staging
 
-# ⚠️ Day 4 (chưa có domain): điền DNS thô của ALB, dạng
-#   http://k8s-badminton-xxxxxxxx-0000000000.ap-southeast-1.elb.amazonaws.com
-# Day 8 (có domain): đổi thành https://staging.badminton.<domain> — sửa MỘT lần là đúng vĩnh viễn.
+# ✅ ĐÃ XÁC MINH Ở DAY 4 — biến này KHÔNG còn là đường găng của rebuild.
 #
-# Đây là điểm KHÔNG tự lành sau `terraform destroy` → `apply`, vì ALB DNS đổi mỗi lần apply.
-# Với link email verify/reset thì lệch một buổi là chấp nhận được (login email/password không
-# gate theo emailVerified). Nhưng chat-service còn dùng chính biến này làm allowed-origin của
-# WS handshake → phải xác minh ở Day 4 xem WebSocketConfig có nhận được
-# setAllowedOriginPatterns("*") không; nếu không thì đây là thao tác tay duy nhất còn sót lại
-# của tiêu chí "rebuild 0 thao tác tay", phải xử lý trước khi demo.
+# Kiểm thật ở repo app: WebSocketConfig.java:61 dùng `setAllowedOrigins(frontendUrl)` — so khớp
+# chuỗi CHÍNH XÁC, không nhận wildcard. Tức là ban đầu nó ĐANG là thao tác tay mỗi lần rebuild
+# (ALB DNS đổi sau mỗi apply → phải sửa dòng này → helm upgrade → rollout restart).
+# Đã xử bằng 1 dòng ở repo app: `.setAllowedOriginPatterns("*")`.
+# ⚠️ Điều đó chỉ có hiệu lực với image chat-service ĐƯỢC BUILD LẠI SAU khi patch —
+#    nếu values/chat-service-*.yaml còn trỏ SHA cũ thì bẫy vẫn còn nguyên.
+#
+# Sau patch, FRONTEND_URL chỉ còn 1 chỗ dùng: link trong email verify/reset của user-service
+# (EmailServiceImpl). Lệch một buổi là chấp nhận được — người dùng vẫn login được bằng
+# email/password. Nên KHÔNG cần chạy theo ALB DNS nữa; muốn link email đẹp thì điền tay
+# một lần cũng được, không điền cũng không hỏng gì.
+#
+# 🔴 Nếu có điền: KHÔNG có dấu "/" cuối. Origin header và cách EmailServiceImpl nối chuỗi
+#    (`${FRONTEND_URL}/verify-email?token=`) đều giả định không có slash.
+# Day 8 (có domain): đổi thành https://staging.badminton.<domain> — set 1 lần, đúng vĩnh viễn.
 frontendUrl: "http://REPLACE-WITH-ALB-DNS"
 
 # prod profile: bật CloudinaryProdGuard → payment-service và chat-service BẮT BUỘC có
 # CLOUDINARY_CLOUD_NAME/API_KEY/API_SECRET, thiếu là fail boot. Đây là by design —
 # nạp param vào SSM, đừng "sửa" bằng cách bỏ profile.
 springProfilesActive: prod
+
+# ---------------------------------------------------------------- Ingress ALB (Day 4)
+ingress:
+  enabled: true
+
+  # 🔑 HAI DÒNG DUY NHẤT PHẢI SỬA Ở DAY 8. Trước đó để RỖNG:
+  #   host rỗng           → Ingress không có rules[].host → ALB nhận mọi Host header
+  #                         → vào bằng DNS thô http://k8s-badminton-xxxx.ap-southeast-1.elb.amazonaws.com
+  #   certificateArn rỗng → chỉ listener 80, không ssl-redirect
+  #
+  # Day 8 điền:
+  #   host: staging.badminton.<domain>
+  #   certificateArn: arn:aws:acm:ap-southeast-1:<acct>:certificate/<id>   (ACM wildcard ở bootstrap)
+  # rồi cập nhật frontendUrl ở trên cho khớp → PR → ArgoCD sync. Rollback = git revert.
+  host: ""
+  certificateArn: ""

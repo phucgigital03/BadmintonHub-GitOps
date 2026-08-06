@@ -5,6 +5,14 @@
 # bắt buộc `kubectl delete pvc --all -n data-staging` KHI CỤM CÒN SỐNG — reclaim policy Delete
 # chỉ chạy lúc PVC bị xoá, destroy thẳng cụm thì không ai gọi nó và volume mồ côi vẫn chảy tiền.
 
+# 🔴 Day 4 — GHIM StorageClass, đừng dựa vào default của cụm.
+# EKS có sẵn `gp2` và Day 3 tạo thêm `gp3`. PVC không khai storageClassName sẽ lấy cái nào
+# được đánh dấu default — mà cái đó tuỳ cách cài add-on, không phải hằng số. Hậu quả khi trật:
+# volume ra gp2 (đắt hơn, IOPS thấp hơn) trong khi bạn tin là gp3, và không có lỗi nào cả.
+# Verify sau khi cài: kubectl -n data-staging get pvc -o custom-columns=NAME:.metadata.name,SC:.spec.storageClassName
+global:
+  defaultStorageClass: gp3
+
 mongodb:
   enabled: true
 mongodbOss:

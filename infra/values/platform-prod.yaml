@@ -2,19 +2,40 @@
 appNamespace: prod
 dataNamespace: data-prod
 
-# ⚠️ Day 4 (chưa có domain): điền DNS thô của ALB, dạng
-#   http://k8s-badminton-xxxxxxxx-0000000000.ap-southeast-1.elb.amazonaws.com
-# Day 8 (có domain): đổi thành https://prod.badminton.<domain> — sửa MỘT lần là đúng vĩnh viễn.
-#
-# Đây là điểm KHÔNG tự lành sau `terraform destroy` → `apply`, vì ALB DNS đổi mỗi lần apply.
-# Với link email verify/reset thì lệch một buổi là chấp nhận được (login email/password không
-# gate theo emailVerified). Nhưng chat-service còn dùng chính biến này làm allowed-origin của
-# WS handshake → phải xác minh ở Day 4 xem WebSocketConfig có nhận được
-# setAllowedOriginPatterns("*") không; nếu không thì đây là thao tác tay duy nhất còn sót lại
-# của tiêu chí "rebuild 0 thao tác tay", phải xử lý trước khi demo.
+# ✅ ĐÃ XÁC MINH Ở DAY 4 — xem giải thích đầy đủ ở infra/values/platform-staging.yaml.
+# Tóm tắt: WebSocketConfig của chat-service từng dùng setAllowedOrigins(frontendUrl) (so khớp
+# chuỗi chính xác) → đã patch sang setAllowedOriginPatterns("*") ở repo app. Sau patch biến này
+# chỉ còn dùng cho link email verify/reset, KHÔNG còn buộc phải chạy theo ALB DNS mỗi rebuild.
+# 🔴 Nếu điền: KHÔNG có dấu "/" cuối.
+# Day 8: https://prod.badminton.<domain> — set 1 lần, đúng vĩnh viễn.
 frontendUrl: "http://REPLACE-WITH-ALB-DNS"
 
 # prod profile: bật CloudinaryProdGuard → payment-service và chat-service BẮT BUỘC có
 # CLOUDINARY_CLOUD_NAME/API_KEY/API_SECRET, thiếu là fail boot. Đây là by design —
 # nạp param vào SSM, đừng "sửa" bằng cách bỏ profile.
 springProfilesActive: prod
+
+# ---------------------------------------------------------------- Ingress ALB (Day 4)
+# 🔴 TẮT CÓ CHỦ ĐÍCH cho tới Day 8 — đây KHÔNG phải quên bật.
+#
+# staging và prod dùng CHUNG một ALB (group.name: badminton). AWS LB Controller gộp rule của
+# mọi Ingress trong group thành MỘT bộ listener rule, sắp theo group.order rồi tới tên. Khi cả
+# hai đều `host: ""`, hai Ingress cùng khai `/`, `/api`, `/ws` ⇒ rule của Ingress đứng sau
+# KHÔNG BAO GIỜ khớp — traffic của prod lặng lẽ chảy vào staging (hoặc ngược lại).
+# Không có lỗi, không có event, `kubectl get ingress` cả hai đều có ADDRESS giống hệt nhau.
+#
+# Host header chính là thứ tách hai env ra, mà host thì chỉ có từ Day 8.
+# → Day 4-7: prod truy cập bằng `kubectl -n prod port-forward svc/frontend 8082:80` nếu cần.
+# → Day 8: điền host + certificateArn rồi đổi enabled: true. Lúc đó ALB route theo Host,
+#   hai env sống chung một ALB đúng như thiết kế.
+#
+# (Đường khác nếu bắt buộc phải có URL công khai cho prod trước Day 8: đổi groupName của prod
+#  sang "badminton-prod" → 2 ALB, +$0.0225/giờ. Không chọn vì trái tinh thần tiết kiệm.)
+ingress:
+  enabled: false
+
+  # 🔑 Day 8 điền 2 dòng này rồi bật enabled ở trên:
+  #   host: prod.badminton.<domain>
+  #   certificateArn: arn:aws:acm:ap-southeast-1:<acct>:certificate/<id>
+  host: ""
+  certificateArn: ""

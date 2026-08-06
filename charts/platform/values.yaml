@@ -57,3 +57,45 @@ sendgrid:
 
 # Thoát hiểm: thêm/ghi đè key bất kỳ mà không phải sửa template.
 extraConfig: {}
+
+# ------------------------------------------------------------------ Ingress ALB (Day 4)
+# Tắt ở dev: kind không có AWS Load Balancer Controller nên object Ingress chỉ nằm im,
+# không ai xử lý — e2e trên kind đi bằng `kubectl port-forward` (xem scripts/kind-deploy.sh).
+ingress:
+  enabled: false
+
+  # Tên object Ingress. Cùng group.name nhưng KHÁC namespace nên staging/prod không đụng nhau.
+  name: badminton
+
+  # IngressClass do chart aws-load-balancer-controller tạo (Day 3).
+  # Dùng spec.ingressClassName thay annotation kubernetes.io/ingress.class (deprecated ở v2).
+  # Verify trước khi cài: kubectl get ingressclass alb
+  className: alb
+
+  # 🔑 HAI CÔNG TẮC CỦA DAY 8 — mặc định rỗng, KHÔNG điền trước Day 8.
+  #   host           "" → không render rules[].host → ALB nhận mọi Host header
+  #                       → truy cập bằng DNS thô http://k8s-badminton-....elb.amazonaws.com
+  #   certificateArn "" → chỉ listener 80, không ssl-redirect
+  # Điền cả hai ở Day 8 → + host + listener 443 + redirect 80→443 + record Route53 tự tạo.
+  # KHÔNG hardcode ARN vào Git: Terraform đọc cert bằng data source, còn ở đây là 1 dòng values.
+  host: ""
+  certificateArn: ""
+
+  # staging + prod CHUNG một ALB. Đổi giá trị này = ALB mới = DNS mới.
+  groupName: badminton
+
+  # Mặc định ALB là 60s → đủ để ngắt WebSocket chat khi người xem ngồi im giữa demo.
+  idleTimeoutSeconds: 300
+
+  # Tên backend = tên Service thật (nameOverride của charts/service), KHÔNG phải release name.
+  backends:
+    api:
+      name: api-gateway
+      port: 3000
+    web:
+      name: frontend
+      port: 80
+
+  # Thoát hiểm: thêm annotation ALB bất kỳ mà không phải sửa template
+  # (vd alb.ingress.kubernetes.io/wafv2-acl-arn, .../tags).
+  extraAnnotations: {}

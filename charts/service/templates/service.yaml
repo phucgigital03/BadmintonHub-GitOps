@@ -5,6 +5,15 @@ metadata:
   labels:
     {{- include "service.labels" . | nindent 4 }}
     {{- include "service.selectorLabels" . | nindent 4 }}
+  {{- with .Values.service.annotations }}
+  # Day 4: chỗ khai annotation cho AWS Load Balancer Controller. Controller đọc annotation
+  # `alb.ingress.kubernetes.io/*` trên chính SERVICE để cấu hình RIÊNG target group của service
+  # đó, và giá trị ở đây ĐÈ LÊN annotation cùng tên đặt ở Ingress.
+  # Cần vì 2 backend sau ALB có health-check khác nhau: frontend (nginx) 200 ở "/", còn
+  # api-gateway trả 404 ở "/" nên phải trỏ health-check sang /actuator/info.
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
 spec:
   type: {{ .Values.service.type }}
   ports:

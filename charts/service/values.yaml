@@ -88,6 +88,11 @@ resources:
 service:
   type: ClusterIP
 
+  # Rỗng với 7/9 service. Chỉ 2 service nằm sau ALB mới cần: api-gateway và frontend
+  # (xem values/<svc>-staging.yaml). Trên kind không có ALB Controller nên annotation này
+  # chỉ là metadata vô hại — giữ cùng một chart cho cả 3 env.
+  annotations: {}
+
 podAnnotations: {}
 nodeSelector: {}
 tolerations: []

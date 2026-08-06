@@ -1,0 +1,104 @@
+{{- if .Values.ingress.enabled }}
+# MỘT bản Ingress duy nhất, dùng cho:
+#   · mọi env (staging / prod — cùng file, khác values)
+#   · CẢ trước lẫn sau khi có domain (Day 4 http thô  →  Day 8 https + host)
+#
+# Toàn bộ "đường may" của Day 8 nằm ở 2 công tắc dưới đây, mặc định RỖNG:
+#   ingress.host           "" → không render rules[].host → ALB nhận mọi Host header
+#                               → truy cập bằng chính DNS thô của ALB
+#   ingress.certificateArn "" → chỉ listener 80, không redirect 80→443
+# Điền cả hai (Day 8) → thêm host + listener 443 + redirect 80→443 + record Route53 tự tạo.
+# Nghĩa là Day 8 = sửa 2 dòng × 2 env + mở PR. KHÔNG phải viết lại manifest lúc T-2.
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: {{ .Values.ingress.name }}
+  labels:
+    app.kubernetes.io/name: platform
+    app.kubernetes.io/managed-by: {{ .Release.Service }}
+  annotations:
+    # ---- luôn có, không phụ thuộc domain -------------------------------------------------
+    # internet-facing: ALB nằm ở public subnet và có DNS công khai.
+    # Thiếu = ALB internal, chỉ gọi được từ trong VPC → người xem demo không vào được.
+    alb.ingress.kubernetes.io/scheme: internet-facing
+
+    # target-type ip: ALB bắn thẳng vào IP của POD (qua ENI của VPC CNI), không qua NodePort.
+    # Hệ quả tốt: bớt 1 hop, và pod chưa Ready thì KHÔNG được đăng ký vào target group.
+    alb.ingress.kubernetes.io/target-type: ip
+
+    # group.name: mọi Ingress cùng group dùng CHUNG một ALB. staging + prod → 1 ALB thay vì 2
+    # (tiết kiệm $0.0225/giờ và ~2 phút provisioning mỗi lần apply).
+    # ⚠️ Đổi giá trị này = tạo ALB mới, DNS mới.
+    alb.ingress.kubernetes.io/group.name: {{ .Values.ingress.groupName }}
+
+    # 🔴 idle_timeout mặc định của ALB là 60s. WebSocket chat của demo hoàn toàn có thể im
+    # hơn 60s khi người xem đang nghe nói chuyện → ALB cắt kết nối, chat "tự nhiên chết"
+    # giữa buổi và cực khó quy trách nhiệm. 300s là ngân sách an toàn cho buổi 5-10 phút.
+    alb.ingress.kubernetes.io/load-balancer-attributes: idle_timeout.timeout_seconds={{ .Values.ingress.idleTimeoutSeconds }}
+
+    {{- with .Values.ingress.extraAnnotations }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+
+    {{- if .Values.ingress.certificateArn }}
+    # ---- CÔNG TẮC HTTPS (Day 8) ----------------------------------------------------------
+    # Cert đến từ ACM, KHÔNG phải cert-manager: ALB terminate TLS ở tầng AWS và chỉ đọc được
+    # cert trong ACM/IAM, không đọc được K8s Secret. Gắn cert-manager vào đây là IM LẶNG
+    # không có HTTPS — không có lỗi rõ ràng nào để lần ra.
+    alb.ingress.kubernetes.io/certificate-arn: {{ .Values.ingress.certificateArn | quote }}
+    alb.ingress.kubernetes.io/listen-ports: '[{"HTTP":80},{"HTTPS":443}]'
+    alb.ingress.kubernetes.io/ssl-redirect: '443'
+    {{- end }}
+
+    {{- if .Values.ingress.host }}
+    # ---- CÔNG TẮC DNS (Day 8) ------------------------------------------------------------
+    # ExternalDNS đọc annotation này để tự tạo/cập nhật record Route53 trỏ về ALB
+    # → destroy/apply ra ALB mới vẫn KHÔNG phải sửa DNS bằng tay.
+    external-dns.alpha.kubernetes.io/hostname: {{ .Values.ingress.host | quote }}
+    # 🔴 TTL 60, đặt ngay từ bản template. Mặc định của ExternalDNS là 300s: cụm rebuild mỗi
+    # buổi ra ALB mới, nhưng record cũ còn nằm trong cache resolver 5 phút → mở URL ra trang
+    # chết đúng đầu buổi demo và bạn sẽ tưởng là cụm hỏng.
+    external-dns.alpha.kubernetes.io/ttl: "60"
+    {{- end }}
+spec:
+  # ingressClassName thay cho annotation kubernetes.io/ingress.class (đã deprecated ở
+  # aws-load-balancer-controller v2). IngressClass `alb` do chart của controller tạo ra —
+  # verify bằng `kubectl get ingressclass alb` TRƯỚC khi cài, vì thiếu nó thì Ingress nằm
+  # im không ai xử lý và cũng không báo lỗi gì.
+  ingressClassName: {{ .Values.ingress.className }}
+  rules:
+    - {{- if .Values.ingress.host }}
+      host: {{ .Values.ingress.host | quote }}
+      {{- end }}
+      http:
+        paths:
+          # ⚠️ THỨ TỰ QUAN TRỌNG. ALB khớp rule theo độ dài path giảm dần, nhưng vẫn viết
+          # /api và /ws TRƯỚC / cho người đọc thấy ngay ý đồ: chỉ 2 tiền tố này đi vào
+          # gateway, còn lại là file tĩnh của FE.
+          #
+          # 🔴 Tên backend là TÊN SERVICE THẬT, lấy từ nameOverride của charts/service —
+          # KHÔNG phải release name. Day 6 ArgoCD đặt release name = <svc>-<env>; nếu chart
+          # đặt tên object theo release name thì backend ở đây không match và ALB trả 503.
+          - path: /api
+            pathType: Prefix
+            backend:
+              service:
+                name: {{ .Values.ingress.backends.api.name }}
+                port:
+                  number: {{ .Values.ingress.backends.api.port }}
+          # /ws = WebSocket handshake của chat (STOMP over SockJS) — cũng đi qua gateway.
+          - path: /ws
+            pathType: Prefix
+            backend:
+              service:
+                name: {{ .Values.ingress.backends.api.name }}
+                port:
+                  number: {{ .Values.ingress.backends.api.port }}
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: {{ .Values.ingress.backends.web.name }}
+                port:
+                  number: {{ .Values.ingress.backends.web.port }}
+{{- end }}
