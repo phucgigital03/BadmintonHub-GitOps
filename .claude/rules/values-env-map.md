@@ -43,7 +43,7 @@ globs: values/*.yaml
 | `RABBITMQ_USER` / `RABBITMQ_PASS` | `badminton` / creds | ConfigMap · **Secret** |
 | `CHAT_BROKER_RELAY` | `true` | ConfigMap |
 | `EUREKA_URL` | `http://eureka-server.staging.svc.cluster.local:8761/eureka` | ConfigMap |
-| `FRONTEND_URL` | URL công khai của env — **2 chỗ dùng**, xem cảnh báo dưới bảng | ConfigMap |
+| `FRONTEND_URL` | URL công khai của env — sau patch Day 4 chỉ còn **1 chỗ dùng** (link email), xem dưới | ConfigMap |
 | `MANAGEMENT_ENDPOINT_HEALTH_PROBES_ENABLED` | `true` | ConfigMap |
 | `SPRING_PROFILES_ACTIVE` | `prod` | ConfigMap |
 | `JWT_SECRET` · `CLOUDINARY_*` · `GOOGLE_CLIENT_*` · `SENDGRID_*` | giá trị ở SSM `/badminton/<env>/*` | **Secret (ExternalSecret)** |
@@ -65,6 +65,23 @@ Prod: thay `staging`→`prod`, `data-staging`→`data-prod`.
 Tài liệu cũ ghi "login email/password không gate theo `emailVerified`" — **đúng với login, nhưng sai nếu hiểu là cả luồng demo không cần verify**. Người dùng mới đăng ký sẽ **403 `FORBIDDEN`** ngay ở bước đặt sân, tức chết đúng giữa buổi demo.
 
 Đường verify: `user-service` gửi mail chứa link `${FRONTEND_URL}/verify-email?token=<uuid>` → FE gọi `GET /api/auth/verify-email?token=...`.
+
+> 📌 **Day 4 — `FRONTEND_URL` là biến DUY NHẤT có ngoại lệ per-service.**
+>
+> Mọi biến non-secret khác đều dùng chung một giá trị từ ConfigMap `app-config`. Riêng biến này
+> **chat-service phải nhận giá trị khác** với 8 service còn lại:
+>
+> | Ai | Giá trị | Lấy từ |
+> |---|---|---|
+> | 8 service (user-service dựng link email verify/reset) | URL công khai của env | `app-config` (ConfigMap) |
+> | **chat-service** (allowed-origin của WS handshake) | **`"*"`** | block `env:` của `values/chat-service-<env>.yaml` |
+>
+> Vì sao phải tách: `charts/platform/templates/configmap.yaml` phát biến này **vô điều kiện cho
+> mọi service**, mà **env tường minh thắng default `*` nằm trong image chat-service** → pattern
+> thành ALB DNS → **WS 403**. Đặt `*` ở platform values thì hỏng link email (`*/verify-email?…`).
+> Đây là chỗ dùng đúng cơ chế `env` thắng `envFrom` của K8s.
+> ⚠️ Chỉ đúng với image chat-service build **sau** patch (`setAllowedOriginPatterns`).
+> Chi tiết + bẫy "Origin không có `/` cuối" + đường Day 8: [`ingress-alb.md`](ingress-alb.md).
 
 **Hệ quả phải xử lý trước demo** (chọn 1):
 

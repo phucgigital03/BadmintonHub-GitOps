@@ -33,6 +33,12 @@ Hệ quả cụ thể: **KHÔNG dùng SealedSecrets** (keypair khoá theo cụm)
 argocd app delete badmintonhub-root --cascade
 #    (hoặc: kubectl delete applicationset badmintonhub -n argocd)
 
+# 1a. 🔴 GỠ POD TRƯỚC KHI XOÁ PVC — nếu không, bước 2 TREO VÔ HẠN (xem mục dưới).
+#     Day 2-4 chưa có ArgoCD thì đây là cách duy nhất; có ArgoCD rồi thì bước 1 đã lo phần này,
+#     nhưng vẫn phải ĐỢI pod biến mất thật (kubectl -n data-<env> get pods → rỗng).
+helm uninstall infra -n data-staging
+helm uninstall infra -n data-prod
+
 # 2. Xoá PVC KHI CỤM CÒN SỐNG — reclaim policy Delete chỉ chạy lúc PVC bị xoá.
 #    Destroy thẳng cụm thì không ai gọi nó → EBS mồ côi VẪN TÍNH TIỀN.
 kubectl delete pvc --all -n data-staging
@@ -50,14 +56,49 @@ cd ../badmintonHub/terraform && terraform destroy
 
 **Giữ lại**: S3 (state) · DynamoDB (lock) · ECR (image) · **SSM param** · Route53 zone + ACM cert (Day 8). Đó là lý do rebuild chỉ mất ~15'.
 
+### 🔴 `kubectl delete pvc` sẽ TREO nếu pod còn sống — thứ tự ở trên là bắt buộc
+
+Đo thật ở Day 4: chạy `kubectl delete pvc --all -n data-staging` khi 5 pod datastore còn chạy thì
+lệnh in `... deleted` cho cả 5 rồi **đứng im vô hạn**, không trả về dấu nhắc. Nguyên nhân là
+finalizer `kubernetes.io/pvc-protection`: K8s **không xoá PVC đang được pod mount**.
+
+Nguy hiểm ở chỗ: nhìn output tưởng đã xoá xong, Ctrl-C rồi `terraform destroy` luôn → PVC chưa
+finalize → **reclaim không chạy → EBS mồ côi**. Đúng cái bẫy mà cả runbook này sinh ra để tránh.
+
+→ `helm uninstall infra -n data-<env>` **TRƯỚC** (bước 1a ở trên) để pod nhả PVC. Sau đó lệnh xoá
+PVC trả về trong vài giây.
+
 ### Verify bill về 0 — chạy thật, đừng tin cảm giác
 
 ```bash
 aws ec2 describe-volumes --filters Name=status,Values=available --query 'Volumes[].VolumeId'   # phải RỖNG
 aws elbv2 describe-load-balancers --query 'LoadBalancers[].LoadBalancerName'                   # phải RỖNG
+kubectl get pv                                                                                  # RỖNG (trước khi destroy)
 ```
 
-Bỏ bước 2 → ~40 GB volume mồ côi (5 datastore × 2 env × 8 Gi) ≈ **$3.2/tháng chảy âm thầm**, không ai nhìn thấy.
+Bỏ bước xoá PVC → ~40 GB volume mồ côi (5 datastore × 2 env × 8 Gi) ≈ **$3.2/tháng chảy âm thầm**, không ai nhìn thấy.
+
+Quét rộng hơn sau `destroy` (đã dùng ở Day 4, tất cả đều phải rỗng):
+
+```bash
+aws eks list-clusters                                                                  # cụm
+aws ec2 describe-instances --filters Name=instance-state-name,Values=running           # node
+aws ec2 describe-nat-gateways --filter Name=state,Values=available                     # $45/tháng nếu sót
+aws ec2 describe-addresses --query 'Addresses[?!AssociationId]'                        # EIP chưa gắn
+aws ec2 describe-snapshots --owner-ids self                                            # snapshot
+```
+
+### ✅ KMS key `PendingDeletion` KHÔNG tốn tiền — đã tra tài liệu, đừng lo lại
+
+Module EKS tạo **1 customer-managed KMS key mỗi lần `apply`** (envelope encryption cho etcd), và
+`destroy` chỉ *schedule* xoá với cửa sổ chờ mặc định **30 ngày** — không xoá ngay được (KMS bắt
+buộc 7–30 ngày). Nên sau vài buổi demo bạn sẽ thấy nhiều key `PendingDeletion` nằm đó.
+
+**Đó là bình thường và miễn phí.** Trang giá AWS KMS: *"There is no charge for customer managed KMS
+keys that you manage and are scheduled for deletion."* ($1/tháng chỉ tính lại nếu bạn **huỷ** lệnh xoá.)
+
+→ Không cần `create_kms_key = false`, không cần dọn tay. Ghi ở đây vì tài liệu AWS để thông tin này
+ở trang **pricing** chứ không ở trang *Deleting keys*, rất dễ đi tra nhầm chỗ rồi kết luận sai.
 
 ## Thứ tự rebuild có ràng buộc
 
