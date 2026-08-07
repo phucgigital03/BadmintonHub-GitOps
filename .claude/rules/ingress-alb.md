@@ -191,8 +191,11 @@ helm template t charts/platform -f infra/values/platform-staging.yaml \
   --set ingress.certificateArn=arn:aws:acm:... \
   | grep -cE 'certificate-arn|listen-ports|ssl-redirect'            # = 3 → đường may Day 8 dùng được
 # Day 8:
-curl -sI https://staging.badminton.$DOMAIN/api/actuator/health      # 200
+curl -sI https://staging.badminton.$DOMAIN                          # 200 (frontend)
 curl -sI http://staging.badminton.$DOMAIN                           # 301 → https
+curl -s -o /dev/null -w '%{http_code}\n' -X POST \
+  https://staging.badminton.$DOMAIN/api/auth/login \
+  -H 'Content-Type: application/json' -d '{"email":"x@y.z","password":"wrong"}'   # 401 (KHÔNG dùng /api/actuator/health — xem 🔴 trên)
 ```
 
 ## 🔴 Web API "secure-context-only" — cả một LỚP lỗi của giai đoạn http (Day 4–7)

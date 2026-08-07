@@ -293,12 +293,53 @@ kubectl create namespace data-staging
 ```
 **Vì sao tách 2 namespace**: app và datastore có vòng đời khác nhau. Teardown xoá app thoải mái nhưng PVC ở `data-staging` phải xoá **có chủ đích** (xem C8). Day 6 ArgoCD tự tạo bằng `CreateNamespace=true`; hôm nay làm tay.
 
+#### C1b · Nạp 8 param vào SSM — làm MỘT LẦN, không phải mỗi rebuild
+
+Param sống **ngoài cụm** nên `terraform destroy` không xoá. Nạp rồi thì các buổi sau bỏ qua bước này — đó chính là cơ chế giữ tiêu chí "rebuild 0 thao tác tay". Kiểm trước xem đã có chưa:
+
+```bash
+aws ssm get-parameters-by-path --path /badminton/staging/ --query 'Parameters[].Name' --output table --no-cli-pager
+```
+
+Nếu **rỗng**, chạy khối này:
+
+```bash
+REGION=ap-southeast-1; ENV=staging
+put() { aws ssm put-parameter --region $REGION --type SecureString --overwrite \
+          --name "/badminton/$ENV/$1" --value "$2" >/dev/null && echo "  ✔ $1"; }
+
+put JWT_SECRET        "$(openssl rand -hex 64)"
+put POSTGRES_USERNAME "postgres"
+put POSTGRES_PASSWORD "$(openssl rand -hex 24)"
+put RABBITMQ_PASS     "$(openssl rand -hex 24)"
+put MONGODB_CHAT_URI  "mongodb://root:$(openssl rand -hex 24)@mongodb.data-$ENV.svc.cluster.local:27017/chat_db?authSource=admin"
+
+put CLOUDINARY_CLOUD_NAME  '<cloud-name>'
+put CLOUDINARY_API_KEY     '<api-key>'
+put CLOUDINARY_API_SECRET  '<api-secret>'
+```
+
+🔴 **KHÔNG tạo `SENDGRID_API_KEY` / `GOOGLE_CLIENT_ID` / `GOOGLE_CLIENT_SECRET`.** SSM **từ chối giá trị rỗng**:
+
+```
+ValidationException: Value at 'value' failed to satisfy constraint:
+Member must have length greater than or equal to 1
+```
+
+Và bạn **không cần** chúng: `eks-secret.sh` dùng `${VAR:-}` nên param không tồn tại vẫn sinh **key rỗng** trong Secret. Spring chỉ cần key **tồn tại** để resolve `${...}`; giá trị rỗng thì chấp nhận được. ⇒ Thực tế chỉ **8** param, không phải 11 như `MANUAL-SETUP.md` §3 liệt kê.
+
+**Vì sao `openssl rand -hex` chứ không `-base64`**: hex chỉ có `0-9a-f`. Base64 sinh `+ / =` — mà mật khẩu Mongo nằm **nhúng trong URI**, nơi `/ : @ ? #` là ký tự cấu trúc và phải percent-encode. Hex né sạch cả một lớp bug, đổi lại chuỗi dài hơn (không ai gõ tay nó).
+
+**Vì sao `CLOUDINARY_*` không bỏ qua được**: `platform-staging.yaml` set `SPRING_PROFILES_ACTIVE=prod` ⇒ `CloudinaryProdGuard` (`@Profile("prod")`) **chặn boot** `payment-service` + `chat-service` nếu thiếu ⇒ chỉ lên được 7/9 pod. Đây là by design, đừng "sửa" bằng cách bỏ profile.
+
+**Vì sao dùng nháy đơn** quanh giá trị Cloudinary: API secret có `-`, `_`; nháy đơn chặn shell diễn giải.
+
 #### C2 · Secret — TRƯỚC datastore
 
 ```bash
 ./scripts/eks-secret.sh staging
 ```
-**Làm gì**: đọc 11 param từ SSM `/badminton/staging/` → tạo `app-secrets` (ns `staging`) + `datastore-secrets` (ns `data-staging`).
+**Làm gì**: đọc param từ SSM `/badminton/staging/` → tạo `app-secrets` (ns `staging`, 11 key — 8 có giá trị + 3 rỗng) + `datastore-secrets` (ns `data-staging`, 4 key).
 
 **Vì sao phải trước**: chart Bitnami trỏ `existingSecret: datastore-secrets`. Secret chưa có ⇒ Postgres/Mongo/RabbitMQ không boot ⇒ bạn sẽ đi soi chart Bitnami thay vì soi thứ tự.
 
@@ -306,7 +347,7 @@ kubectl create namespace data-staging
 
 **Output đúng**: `✅ Xong.` + danh sách **tên key** (script cố tình **không in giá trị**).
 **Sai thì**:
-- `SSM ... RỖNG` → chưa nạp param, xem [`MANUAL-SETUP.md`](MANUAL-SETUP.md) §3.
+- `SSM ... RỖNG` → chưa nạp param → quay lại **C1b**.
 - `thiếu ?authSource=admin` → sửa param `MONGODB_CHAT_URI` ở SSM. Root user của Bitnami Mongo nằm ở db `admin`, không phải `chat_db`.
 - `AccessDenied` → user AWS của bạn thiếu `ssm:GetParametersByPath` hoặc `kms:Decrypt`.
 
@@ -472,28 +513,84 @@ Mở `http://$ALB` bằng trình duyệt: đăng ký → verify email → đăng
 
 Trước Day 8 (còn http): ở màn thanh toán **đọc/gõ tay số tài khoản, đừng bấm nút copy** — `navigator.clipboard` chỉ chạy trên secure context, nên trên http không copy gì nhưng toast **vẫn báo "Đã copy"**. Hết ngay sau Day 8.
 
+#### C7b · Seed dữ liệu demo — 2 câu SQL, làm sau khi đăng ký tài khoản
+
+Cụm ephemeral nên DB rỗng mỗi lần dựng: **không có role `STAFF`**, và tài khoản mới **chưa verify email**. Thiếu cả hai thì không demo được: đặt sân trả 403, chat không có phía nhân viên để trò chuyện.
+
+Đăng ký trước 2 tài khoản trên trình duyệt (1 khách + 1 nhân viên, dùng cửa sổ ẩn danh cho cái thứ hai), rồi:
+
+```bash
+kubectl -n data-staging exec -i statefulset/postgresql -- sh -c 'PGPASSWORD=$(cat $POSTGRES_PASSWORD_FILE) psql -U postgres -d user_db -P pager=off -c "INSERT INTO roles (id, created_at, updated_at, name) SELECT gen_random_uuid(), now(), now(), '"'"'STAFF'"'"' WHERE NOT EXISTS (SELECT 1 FROM roles WHERE name='"'"'STAFF'"'"');" -c "INSERT INTO user_roles (user_id, role_id) SELECT u.id, r.id FROM users u, roles r WHERE u.email='"'"'staff@test.local'"'"' AND r.name='"'"'STAFF'"'"' ON CONFLICT DO NOTHING;" -c "UPDATE users SET is_email_verified=true;" -c "SELECT u.email, r.name FROM users u JOIN user_roles ur ON ur.user_id=u.id JOIN roles r ON r.id=ur.role_id;"'
+```
+
+**Cấu trúc cần biết**: `roles` và `user_roles` là **bảng nối uuid–uuid** (`user_roles(user_id, role_id)`, PK ghép) — gán quyền là **INSERT vào bảng nối**, không phải UPDATE một cột trong `users`. App tạo role theo nhu cầu nên lúc đầu bảng `roles` **chỉ có `USER`**; phải tự thêm `STAFF`.
+
+Cả 2 câu INSERT đều **idempotent** (`WHERE NOT EXISTS` / `ON CONFLICT DO NOTHING`) nên chạy lại không nhân bản.
+
+🔴 **Sau khi chạy SQL phải ĐĂNG XUẤT rồi ĐĂNG NHẬP LẠI.** Role được nhúng vào **JWT lúc đăng nhập**; token đang cầm trên trình duyệt được cấp trước khi có `STAFF` nên vẫn mang quyền cũ. Sửa DB không làm token tự đổi — đây là chỗ dễ tưởng "SQL không ăn" nhất.
+
+*(Dữ liệu chat nằm ở **MongoDB** chứ không phải Postgres. Nếu widget chat báo `403 "Bạn không có quyền truy cập hội thoại này"` thì đó là id hội thoại cũ còn trong localStorage của phiên đăng nhập trước — mở Console gõ `localStorage.clear(); location.reload();` là hết.)*
+
 #### C8 · 🔴 Teardown — làm ĐÚNG THỨ TỰ, sai là chảy tiền
 
 ```bash
-# 1. Xoá PVC KHI CỤM CÒN SỐNG
-kubectl delete pvc --all -n data-staging
+# 1. GỠ POD TRƯỚC — nếu không, bước 2 TREO VÔ HẠN
+helm uninstall infra -n data-staging
 
-# 2. Xoá Ingress để controller tự gỡ ALB (PHẢI trước khi gỡ controller / destroy)
+# 2. Xoá PVC KHI CỤM CÒN SỐNG
+kubectl delete pvc --all -n data-staging
+kubectl get pv                                  # phải RỖNG trước khi đi tiếp
+
+# 3. Xoá Ingress để controller tự gỡ ALB (PHẢI trước khi destroy)
 kubectl delete ingress --all -A
 
-# 3. Huỷ hạ tầng (ở repo app)
+# 4. Huỷ hạ tầng (ở repo app) — gõ `yes` khi nó hỏi, rồi chờ ~10-15 phút
 cd ../badmintonHub/terraform && terraform destroy
 ```
 
-**Vì sao bước 1 không được bỏ**: reclaim policy `Delete` chỉ chạy **lúc PVC bị xoá**. `terraform destroy` thẳng cụm thì không ai gọi nó → **26 GB EBS mồ côi vẫn tính tiền** mãi mãi, và không có gì nhắc bạn.
+🔴 **Vì sao bước 1 tồn tại** (đo thật ở Day 4, bản runbook cũ **thiếu** bước này): PVC có finalizer `kubernetes.io/pvc-protection` — K8s **không xoá PVC đang được pod mount**. Chạy bước 2 khi 5 pod datastore còn sống thì lệnh in `persistentvolumeclaim "..." deleted` cho **cả 5** rồi **đứng im vô hạn**, không trả về dấu nhắc.
 
-**Vì sao bước 2 không được bỏ**: ALB do controller tạo bằng AWS API, **Terraform không quản lý nó**. Controller chết trước khi Ingress bị xoá ⇒ ALB thành mồ côi ($0.0225/giờ ≈ $16/tháng).
+Cái làm nó nguy hiểm là output **trông như đã xong**. Ctrl-C rồi `terraform destroy` luôn ⇒ PVC chưa finalize ⇒ reclaim không chạy ⇒ **EBS mồ côi** — đúng cái bẫy mà cả runbook này sinh ra để tránh.
 
-**Verify bill về 0 — chạy thật, đừng tin cảm giác:**
+**Vì sao bước 2 không được bỏ**: reclaim policy `Delete` chỉ chạy **lúc PVC bị xoá**. `terraform destroy` thẳng cụm thì không ai gọi nó → **26 GB EBS mồ côi vẫn tính tiền** mãi mãi, không có gì nhắc bạn.
+
+**Vì sao bước 3 không được bỏ**: ALB do controller tạo bằng AWS API, **Terraform không quản lý nó**. Controller chết trước khi Ingress bị xoá ⇒ ALB mồ côi ($0.0225/giờ ≈ $16/tháng).
+
+**Verify bill về 0 — chạy thật, đừng tin cảm giác.** Bộ cũ chỉ kiểm EBS + ELB nên **không bắt được** NAT/EIP/snapshot/cụm còn sống:
+
 ```bash
-aws ec2 describe-volumes --filters Name=status,Values=available --query 'Volumes[].VolumeId'   # phải RỖNG
-aws elbv2 describe-load-balancers --query 'LoadBalancers[].LoadBalancerName'                   # phải RỖNG
+R=ap-southeast-1
+aws eks list-clusters --region $R --no-cli-pager
+aws ec2 describe-instances --region $R --filters Name=instance-state-name,Values=running \
+  --query 'Reservations[].Instances[].InstanceId' --output text --no-cli-pager
+aws ec2 describe-volumes --region $R --filters Name=status,Values=available \
+  --query 'Volumes[].VolumeId' --output text --no-cli-pager
+aws elbv2 describe-load-balancers --region $R --query 'LoadBalancers[].LoadBalancerName' --output text --no-cli-pager
+aws ec2 describe-nat-gateways --region $R --filter Name=state,Values=available \
+  --query 'NatGateways[].NatGatewayId' --output text --no-cli-pager
+aws ec2 describe-addresses --region $R --query 'Addresses[?!AssociationId].PublicIp' --output text --no-cli-pager
+aws ec2 describe-snapshots --region $R --owner-ids self --query 'Snapshots[].SnapshotId' --output text --no-cli-pager
 ```
+
+**Tất cả phải rỗng.** Ba thứ **KHÔNG** phải rác, đừng dọn:
+- **9 ECR repo · S3 state · DynamoDB lock · SSM param** — bootstrap stack, cố ý giữ để rebuild nhanh.
+- **KMS key `PendingDeletion`** — mỗi `apply` tạo 1 key, `destroy` chỉ *schedule* xoá với cửa sổ 30 ngày nên chúng tích lại. **Miễn phí**: trang pricing AWS ghi *"There is no charge for customer managed KMS keys that you manage and are scheduled for deletion."*
+- **CloudWatch log group** — hiện không có cái nào vì EKS control-plane logging đang tắt. Nếu sau này bật, nhớ là log **ở lại sau destroy** và tính tiền.
+
+#### 💰 Chi phí thực đo (buổi đầu tiên, 2026-08-06)
+
+| | |
+|---|---|
+| Cụm sống | **2.5 giờ** (vừa dựng vừa debug) |
+| EKS control plane $0.10/giờ | ~$0.25 |
+| 2× `t3.xlarge` spot | ~$0.25 |
+| ALB $0.0225/giờ | ~$0.06 |
+| EBS 26 GB × 2.5 giờ | ~$0.01 |
+| **Tổng buổi** | **≈ $0.57** — tức **≈ $0.22/giờ cụm sống** |
+
+`ephemeral-cost.md` ghi *"1 buổi trọn gói ≈ $0.15"* — đúng cho buổi **gọn** (~40 phút: apply → demo 10' → destroy). Buổi đầu bao giờ cũng lâu hơn vì phải debug; dùng hệ số **$0.22/giờ** để tự ước tính.
+
+Sau teardown còn **~$0.30/tháng**, toàn bộ là **ECR 3.2 GB** ($0.10/GB/tháng). Mỗi lần push đủ 9 image thêm ~1.8 GB ⇒ cân nhắc ECR lifecycle policy (giữ 5 image gần nhất + xoá untagged) ở `terraform/bootstrap/` nếu demo nhiều buổi.
 
 ---
 
@@ -502,12 +599,16 @@ aws elbv2 describe-load-balancers --query 'LoadBalancers[].LoadBalancerName'    
 Trả lời được hết là đã hiểu Day 4. (Đáp án nằm trong §1–§2.)
 
 1. `kubectl get ingress` có ADDRESS rỗng suốt 10 phút. Bạn đọc log của **cái gì** đầu tiên, và vì sao **không** phải sửa file Ingress?
-2. `kubectl get pods` xanh 9/9, `RESTARTS` = 0, nhưng `curl http://$ALB/api/actuator/health` trả **502**. Nghi chỗ nào trước, và dùng lệnh nào để xác nhận — biết rằng `kubectl` **không nhìn thấy** thứ đó?
-3. Pod `CrashLoopBackOff`, log app không có exception nào lạ. Kiểm tra **một** thứ ở phía image trước khi đọc tiếp log — thứ đó là gì?
-4. Bạn sửa `FRONTEND_URL` trong `platform-staging.yaml`, `helm upgrade` báo thành công, ConfigMap trên cụm đã có giá trị mới. Vì sao chat vẫn chết?
-5. Vì sao `values/platform-prod.yaml` để `ingress.enabled: false` mà **không** phải là quên bật?
-6. Bạn `terraform destroy` mà quên `kubectl delete pvc`. Tiền chảy ở đâu, mỗi tháng bao nhiêu, và vì sao **không** có cảnh báo nào?
-7. Vì sao ALB health-check của api-gateway dùng `/actuator/info` chứ không phải `/actuator/health`, trong khi readiness probe của K8s thì ngược lại?
+2. `kubectl get pods` xanh 9/9, `RESTARTS` = 0, nhưng `curl http://$ALB/api/courts` trả **502**. Nghi chỗ nào trước, và dùng lệnh nào để xác nhận — biết rằng `kubectl` **không nhìn thấy** thứ đó?
+3. Cũng cấu hình đó nhưng trả **404** thay vì 502. Vì sao hai mã này dẫn bạn đi **hai hướng hoàn toàn khác nhau**?
+4. Pod `CrashLoopBackOff`, log app không có exception nào lạ. Kiểm tra **một** thứ ở phía image trước khi đọc tiếp log — thứ đó là gì?
+5. Bạn sửa `FRONTEND_URL` trong `platform-staging.yaml`, `helm upgrade` báo thành công, ConfigMap trên cụm đã có giá trị mới. Vì sao chat vẫn chết?
+6. `values/chat-service-staging.yaml` có `env.FRONTEND_URL: "*"`, trong khi image vốn đã mặc định `*` rồi. Vì sao xoá dòng đó đi thì chat **hỏng**?
+7. Vì sao `values/platform-prod.yaml` để `ingress.enabled: false` mà **không** phải là quên bật?
+8. Bạn chạy `kubectl delete pvc --all -n data-staging`, nó in `deleted` cho cả 5 PVC rồi **đứng im**. Chuyện gì đang xảy ra, và vì sao Ctrl-C rồi `terraform destroy` là **tốn tiền**?
+9. Bạn `terraform destroy` mà quên xoá PVC. Tiền chảy ở đâu, mỗi tháng bao nhiêu, và vì sao **không** có cảnh báo nào?
+10. Vì sao ALB health-check của api-gateway dùng `/actuator/info` chứ không phải `/actuator/health`, trong khi readiness probe của K8s thì ngược lại?
+11. Nút Gửi của chat bấm không ăn, Console báo `crypto.randomUUID is not a function`. Vì sao **không** phải lỗi WebSocket, và vì sao Day 8 sửa nó mà không cần đổi dòng code nào?
 
 ---
 
