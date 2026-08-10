@@ -10,6 +10,13 @@
 global:
   defaultStorageClass: gp3
 
+# --------------------------------------------- External Secrets (Day 6)
+# Xem giải thích ở infra/values/infra-staging.yaml. Thay thế `scripts/eks-secret.sh prod`.
+externalSecret:
+  enabled: true
+  # 🔴 GIỮ dấu "/" cuối.
+  ssmPath: /badminton/prod/
+
 mongodb:
   enabled: true
 mongodbOss:

@@ -13,6 +13,16 @@
 global:
   defaultStorageClass: gp3
 
+# --------------------------------------------- External Secrets (Day 6)
+# Bật → chart sinh ExternalSecret `datastore-secrets` trong ns data-staging (sync-wave -1, tức
+# TRƯỚC 5 StatefulSet ở wave 0). Chính là Secret mà postgresql/mongodb/rabbitmq bên dưới trỏ
+# `existingSecret` vào, nên mật khẩu datastore dựng lên bằng = mật khẩu app kết nối bằng.
+# Thay thế `scripts/eks-secret.sh staging`.
+externalSecret:
+  enabled: true
+  # 🔴 GIỮ dấu "/" cuối.
+  ssmPath: /badminton/staging/
+
 mongodb:
   enabled: true
 mongodbOss:

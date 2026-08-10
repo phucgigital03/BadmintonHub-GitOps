@@ -41,3 +41,11 @@ ingress:
   # rồi cập nhật frontendUrl ở trên cho khớp → PR → ArgoCD sync. Rollback = git revert.
   host: ""
   certificateArn: ""
+
+# --------------------------------------------- External Secrets (Day 6)
+# Bật → chart sinh ExternalSecret `app-secrets` trong ns staging, ESO đọc SSM.
+# Đây là thứ thay thế `scripts/eks-secret.sh staging` — từ Day 6 KHÔNG phải chạy script đó nữa.
+externalSecret:
+  enabled: true
+  # 🔴 GIỮ dấu "/" cuối. Thiếu nó thì `find` khớp theo tiền tố và có thể hút nhầm cây param khác.
+  ssmPath: /badminton/staging/

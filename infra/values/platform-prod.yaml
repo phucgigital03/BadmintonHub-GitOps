@@ -39,3 +39,12 @@ ingress:
   #   certificateArn: arn:aws:acm:ap-southeast-1:<acct>:certificate/<id>
   host: ""
   certificateArn: ""
+
+# --------------------------------------------- External Secrets (Day 6)
+# Bật → chart sinh ExternalSecret `app-secrets` trong ns prod, ESO đọc SSM.
+# ⚠️ Khác Ingress ở trên (tắt tới Day 8), cái này BẬT NGAY: ApplicationSet sinh 9 app prod từ
+# đầu, pod prod cần Secret để boot. Prod không có URL công khai trước Day 8, nhưng vẫn CHẠY.
+externalSecret:
+  enabled: true
+  # 🔴 GIỮ dấu "/" cuối.
+  ssmPath: /badminton/prod/

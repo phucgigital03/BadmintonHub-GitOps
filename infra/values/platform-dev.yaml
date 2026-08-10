@@ -8,6 +8,13 @@ dataNamespace: data-dev
 # handshake — sai thì chat chết trong khi mọi luồng khác vẫn xanh (rất khó truy).
 frontendUrl: http://localhost:8081
 
+# --------------------------------------------- External Secrets (Day 6)
+# TẮT ở dev, khai tường minh để không ai tưởng là quên: kind không có IRSA nên ESO không có
+# đường xác thực với AWS. Trên kind, Secret `app-secrets` do scripts/kind-secret.sh sinh từ
+# .env local — CÙNG TÊN Secret, nên values của 9 service giống hệt mọi env.
+externalSecret:
+  enabled: false
+
 # Cố ý ĐỂ RỖNG ở dev (không bật profile prod).
 # CloudinaryProdGuard chỉ active với @Profile("prod") và sẽ chặn boot payment-service +
 # chat-service nếu thiếu CLOUDINARY_*. Không bật prod ở kind → CloudinaryService degrade về

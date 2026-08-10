@@ -15,6 +15,27 @@ global:
   security:
     allowInsecureImages: true
 
+# ------------------------------------------------ External Secrets (Day 6)
+# Sinh Secret `datastore-secrets` từ SSM — chính là Secret mà 3 chart Bitnami ở dưới trỏ
+# `existingSecret` vào. Giải thích đầy đủ ở templates/externalsecret.yaml.
+externalSecret:
+  # Tắt ở dev: kind không có IRSA. Trên kind, scripts/kind-secret.sh sinh Secret cùng tên.
+  enabled: false
+
+  # 🔴 v1, KHÔNG phải v1beta1 — v1beta1 đã bị gỡ ở ESO 0.17.0, và ở 0.16.x thì webhook tự chuyển
+  # đổi làm ArgoCD OutOfSync vĩnh viễn. Giải thích dài ở charts/platform/values.yaml.
+  apiVersion: external-secrets.io/v1
+
+  storeName: aws-ssm
+
+  # Phải khớp `existingSecret` / `existingPasswordSecret` / `existingErlangSecret` bên dưới.
+  targetName: datastore-secrets
+
+  refreshInterval: 1h
+
+  # Cây param SSM của env. BẮT BUỘC có dấu "/" cuối.
+  ssmPath: ""
+
 # ---------------------------------------------------------------- PostgreSQL
 # MỘT instance / 5 database. Dùng superuser `postgres` vì ddl-auto=update cần quyền tạo schema
 # và app chỉ có duy nhất một cặp POSTGRES_USERNAME/POSTGRES_PASSWORD dùng chung cho cả 5 DB.

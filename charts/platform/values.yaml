@@ -99,3 +99,44 @@ ingress:
   # Thoát hiểm: thêm annotation ALB bất kỳ mà không phải sửa template
   # (vd alb.ingress.kubernetes.io/wafv2-acl-arn, .../tags).
   extraAnnotations: {}
+
+# ------------------------------------------------ External Secrets (Day 6)
+# Sinh Secret `app-secrets` từ SSM, thay cho scripts/eks-secret.sh.
+externalSecret:
+  # Tắt ở dev: kind không có IRSA nên ESO không có đường đọc SSM. Trên kind, `app-secrets` do
+  # scripts/kind-secret.sh sinh từ .env local — cùng TÊN Secret nên values của service không đổi.
+  enabled: false
+
+  # 🔴 KHÔNG để v1beta1.
+  # `external-secrets.io/v1beta1` ĐÃ BỊ GỠ ở ESO v0.17.0 (v0.16.x phục vụ cả hai, v1 là bản chính
+  # thức). Hai kiểu hỏng khác nhau:
+  #   - ESO >= 0.17 + khai v1beta1 → manifest không apply được, app ArgoCD đỏ ngay (còn dễ thấy).
+  #   - ESO 0.16.x + khai v1beta1 → webhook TỰ chuyển sang v1, ArgoCD so desired (v1beta1) với
+  #     live (v1) thấy khác nhau → app OutOfSync VĨNH VIỄN, bấm sync bao nhiêu lần cũng không hết
+  #     (external-secrets#5478). Cái này mới là cái tốn thời gian.
+  # ESO < 0.16 thì đổi đúng 1 dòng này về external-secrets.io/v1beta1.
+  # Kiểm: kubectl get crd externalsecrets.external-secrets.io -o jsonpath='{.spec.versions[*].name}'
+  apiVersion: external-secrets.io/v1
+
+  # ClusterSecretStore do bootstrap.sh của Day 3 cài (cluster-scoped, dùng chung 4 namespace).
+  storeName: aws-ssm
+
+  # Phải khớp `envFrom.secret` trong 27 file values/. Đổi tên này = phải sửa cả 27 file.
+  targetName: app-secrets
+
+  refreshInterval: 1h
+
+  # Cây param SSM của env. BẮT BUỘC có dấu "/" cuối, nếu không `find` khớp nhầm sang env khác
+  # (vd "/badminton/prod" cũng khớp "/badminton/production/...").
+  ssmPath: ""
+
+  # Key BẮT BUỘC tồn tại trong Secret nhưng KHÔNG có ở SSM, vì SSM từ chối giá trị rỗng
+  # (ValidationException: length ≥ 1). Template bơm chúng vào với giá trị "" để Spring resolve
+  # được placeholder ${...} — thiếu hẳn key thì context fail bằng "Could not resolve placeholder",
+  # một thông báo không nhắc gì tới Secret.
+  # 🔴 Nạp giá trị THẬT cho cái nào ở SSM thì phải XOÁ tên đó khỏi danh sách này, không thì bị
+  #    ghi đè rỗng trong im lặng (template thắng provider) — xem landmine ở templates/.
+  optionalKeys:
+    - SENDGRID_API_KEY
+    - GOOGLE_CLIENT_ID
+    - GOOGLE_CLIENT_SECRET
