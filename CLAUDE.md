@@ -149,7 +149,7 @@ Day 6 ArgoCD đặt release name = `<svc>-<env>` (vd `user-service-staging`). N�
 > Phần này được cập nhật tự động bằng lệnh `/handoff` cuối mỗi phiên làm việc.
 > Chỉ phản ánh **việc đang thực sự làm** ở repo này — kế hoạch chưa động tới thì để trong `Planning_CICD.md`.
 
-**Cập nhật lần cuối**: 2026-08-06 (**Day 4 XONG**: Ingress ALB template hoá + 18 values trỏ ECR thật + deploy staging lên EKS và **e2e trọn vẹn trên URL công khai** — đăng ký → verify → đặt sân → **chat 2 chiều realtime**. Teardown sạch, bill về ~$0.30/tháng chỉ còn ECR.)
+**Cập nhật lần cuối**: 2026-08-10 (**Day 6 ĐẠT DoD**: ArgoCD v3.5.0 + app-of-apps + ApplicationSet 18 child + ESO đọc SSM. **23/23 app Synced/Healthy · 18 pod RESTARTS 0 · promote và rollback đã chạy thật**. Còn nợ đúng 1 tiêu chí: RESTARTS 0 **từ cụm trắng** — cần rebuild nguội ở Day 7.)
 
 ### ✅ Đã hoàn thành
 
@@ -173,23 +173,41 @@ Day 6 ArgoCD đặt release name = `<svc>-<env>` (vd `user-service-staging`). N�
 - **Chat 2 chiều realtime chạy thật trên URL công khai** — tin gửi có `✓✓`, phía staff trả lời hiện ngay ⇒ WS handshake qua ALB + Mongo + STOMP khép vòng.
 - **Teardown sạch**: EKS/EC2/EBS/ELB/NAT/EIP/snapshot/VPC/IAM đều rỗng. Chi phí buổi ≈ **$0.57** cho 2.5 giờ (≈ **$0.22/giờ cụm sống**).
 
+**Day 6** (EKS, staging **+ prod**) — **deliverable ở repo này**:
+- `apps/` — **6 file**: `root.yaml` (app-of-apps) · `infra-{staging,prod}.yaml` (wave 1) · `platform-{staging,prod}.yaml` (wave 2, multi-source `$values`) · `appset-services.yaml` (wave 3, matrix 9 svc × 2 env = **18 child**).
+- `charts/platform/templates/externalsecret.yaml` → `app-secrets` @ ns `<env>` · `infra/templates/externalsecret.yaml` → `datastore-secrets` @ ns `data-<env>`. **KHÔNG có thư mục `external-secrets/`** (xem §Quyết định).
+- `charts/service/templates/deployment.yaml` — **initContainer hàng rào** chờ 5 datastore mở cổng; `charts/platform` phát `DATASTORE_WAIT`.
+- `scripts/argocd-install.sh` — ghim chart `10.2.3` → ArgoCD **v3.5.0**, idempotent, tự đối chiếu 10 param SSM mỗi env.
+- `docs/DAY6-EXPLAINED.md` + cập nhật `secrets-eso.md` · `argocd-appset.md` · `helm-chart.md` · `ephemeral-cost.md` §7.1 · `MANUAL-SETUP.md` §3.
+- **27 file `values/` không sửa một dòng nào** cho việc chuyển sang ESO — vì tên target Secret giữ nguyên. Đó là bằng chứng thiết kế Day 2/4 đúng. *(6 file eureka/frontend có thêm `waitForDatastores: false`.)*
+
+**Đã chạy thật trên EKS** (cụm dựng ~02:20, ~2 giờ):
+- **23/23 app Synced + Healthy** (18 service + 2 infra + 2 platform + root) · **18/18 pod Running, tổng RESTARTS = 0** · 10/10 PVC `Bound` gp3.
+- **4/4 ExternalSecret `SecretSynced`** — ESO đọc SSM, `scripts/eks-secret.sh` không còn được chạy.
+- **CI → staging đã tự đóng**: 9 svc staging chạy `e496991`, SHA do CI của Day 5 tự ghi (commit `678fd44`) → ArgoCD sync, không ai gõ lệnh nào.
+- **Promote thật**: `user-service` prod `5a7067c` → `e496991` bằng 1 dòng `image.tag`, không build lại. **Rollback thật**: `git revert` → về `5a7067c`.
+- e2e trên URL công khai: `/` **200** · login sai → **401 + JSON `INVALID_CREDENTIALS`** · WS `/ws` origin ALB → **101**, origin lạ → **403**.
+
 ### 🔄 Đang làm / còn dở
 
-- ✅ Day 4 **đã commit đủ** — 5 commit: `dd9ff9b` ingress · `5c0d45e` values · `1770124` scripts · `18a77b5` docs/handoff · `358faf8` promote frontend prod. Working tree **sạch**, **chưa push** (`main` ahead 6 so với `origin/main`).
+- ✅ Day 6 **đã commit + push đủ** — 6 commit: `1695099` apps · `3ccb38a` scripts · `49710ca` docs · `33ec687` + `304a4ea` 2 lần fix từ chạy thật · `78e92b8` sửa kỳ vọng label. Cộng `04e8438`/`3ec649d` là cặp promote/revert của bài diễn tập. Working tree **sạch**, `main` = `origin/main`.
+- ❌ **Tiêu chí DUY NHẤT chưa verify: `RESTARTS 0` từ cụm TRẮNG.** Hôm nay datastore đã sống sẵn khi initContainer chạy nên nó qua trong 2 giây — chứng minh **không hồi quy**, KHÔNG chứng minh nó chặn được cuộc đua. Chỉ nghiệm thu được ở **rebuild nguội**, đã nằm sẵn trong Day 7 §"diễn tập teardown → rebuild".
+  *(Cơ chế chặn thì đã verify riêng bằng pod nháp: initContainer đứng `Init:0/1` khi host không tồn tại, và `Completed` sau khi hết `waitTimeoutSeconds`.)*
 - ⚠️ **Tag image LỆCH giữa các service — bình thường trong GitOps, đừng "sửa" cho đều**:
 
   | Values | Tag | Vì sao |
   |---|---|---|
-  | 8 service Java (staging + prod) | `5a7067c` | lần build đầu, đã gồm patch `WebSocketConfig` + FE same-origin |
-  | `frontend-{staging,prod}.yaml` | **`59bf4c6`** | build lại **chỉ mình frontend** để fix `crypto.randomUUID` (secure context); prod đã promote sang cùng SHA |
+  | 9 svc **staging** | `e496991` | CI của Day 5 tự bump khi merge `main` |
+  | 8 svc Java **prod** | `5a7067c` | chưa promote |
+  | `frontend-prod.yaml` | **`59bf4c6`** | build lại **chỉ mình frontend** để fix `crypto.randomUUID`; đã promote từ Day 4 |
 
-  Mỗi service có vòng đời riêng nên tag khác nhau là đúng — **KHÔNG** build lại 8 service Java chỉ để cho tag bằng nhau. Trên ECR: 8 repo Java chỉ có `5a7067c`; repo `frontend` có **cả `5a7067c` và `59bf4c6`**.
+  Mỗi service có vòng đời riêng nên tag khác nhau là đúng — **KHÔNG** build lại cho bằng nhau.
 
 ### 📋 Việc tiếp theo (theo thứ tự ưu tiên)
-1. **Push `main`** lên `origin` (6 commit đang chờ) — hoặc để đó nếu muốn xem lại trước.
-2. **Day 5 — CI/CD**: mở Claude Code ở **`../badmintonHub` (app repo)**, dùng **📋 Prompt paste-ready — Day 5** trong `Planning_CICD.md`. **Không làm ở repo này.**
-3. **Day 6** (repo này): `apps/` ApplicationSet + cài ArgoCD + chuyển `scripts/eks-secret.sh` → `ExternalSecret` (ESO + ClusterSecretStore **đã cài sẵn và `Valid`** từ `bootstrap.sh` của Day 3 ⇒ rủi ro Day 6 giảm hẳn). Nhớ **bật `ingress.enabled: true` cho prod chỉ từ Day 8** (xem §Quyết định).
-4. Day 7 (observability + teardown) → Day 8 (domain + HTTPS, cả 2 repo).
+1. **Teardown** theo `ephemeral-cost.md` §7.1 — thứ tự bắt buộc: xoá ApplicationSet + app → **đợi pod `data-*` RỖNG bằng mắt** → xoá PVC → xoá Ingress → `helm uninstall aws-lb-controller` → `terraform destroy` (repo app) → chạy bộ lệnh verify bill về 0.
+2. **Day 7** (cả 2 repo): observability (`kube-prometheus-stack` + Loki, thêm 1-2 file vào `apps/` với wave phù hợp) **+ diễn tập rebuild nguội** — đây chính là chỗ đóng nốt tiêu chí `RESTARTS 0` còn nợ. Thêm `micrometer-registry-prometheus` là việc **ở repo app**.
+3. **Day 8** (cả 2 repo): domain + HTTPS. Ở repo này chỉ là **2 dòng values × 2 env** (`ingress.host`, `ingress.certificateArn`) + `frontendUrl`, rồi bật `ingress.enabled: true` cho prod.
+4. Tuỳ chọn: promote nốt 8 svc Java prod lên `e496991` (trừ `frontend`, nó có vòng đời riêng).
 
 **Việc thuộc repo app, ghi lại để không quên** (không chặn Day 5/6):
 - `court-service` `GlobalExceptionHandler` map `HttpRequestMethodNotSupportedException` → **500** thay vì 405.
@@ -225,9 +243,21 @@ Day 6 ArgoCD đặt release name = `<svc>-<env>` (vd `user-service-staging`). N�
 - 🔴 **`ingress.enabled: false` cho `prod` tới Day 8** — không phải quên bật. staging + prod cùng `group.name` mà cùng `host: ""` ⇒ hai Ingress cùng khai `/`, `/api`, `/ws`; controller gộp rule và **cái đứng sau không bao giờ khớp**, traffic prod lặng lẽ chảy vào staging, cả hai đều có ADDRESS giống hệt nhau. Host header mới là thứ tách 2 env, mà host chỉ có từ Day 8.
 - **ALB healthcheck khai trên Service, dùng `/actuator/info`** — ALB probe mặc định `/` mà gateway trả 404 ⇒ target unhealthy ⇒ `/api` 502 dù `kubectl` xanh. Chọn `/actuator/info` chứ không `/actuator/health` vì readiness của K8s đã gác composite rồi; dùng composite hai lần = Redis nhấp nháy bị phạt hai lần.
 - **Ghim `global.defaultStorageClass: gp3`** — EKS còn sẵn `gp2` với provisioner in-tree `kubernetes.io/aws-ebs` **đã bị gỡ khỏi K8s từ 1.31** (cụm đang chạy 1.33) ⇒ gp2 là mồi nhử, không provision được gì.
-- **Teardown phải `helm uninstall infra` TRƯỚC khi xoá PVC** — finalizer `pvc-protection` làm `kubectl delete pvc` **treo vô hạn** khi pod còn mount. Đã sửa vào runbook §7.1.
+- **Teardown phải `helm uninstall infra` TRƯỚC khi xoá PVC** — finalizer `pvc-protection` làm `kubectl delete pvc` **treo vô hạn** khi pod còn mount. Đã sửa vào runbook §7.1. *(Từ Day 6 ArgoCD sở hữu `infra`, nên bước này thành "xoá ApplicationSet + app rồi ĐỢI pod `data-*` rỗng bằng mắt".)*
 
-### 💬 Claude đã làm trong phiên này (Day 4)
+**Chốt thêm ở Day 6:**
+- 🔴 **`sync-wave` giữa các Application là BEST-EFFORT, KHÔNG phải hàng rào.** Đo thật: 18 pod service sinh `02:33:31`, 10 pod datastore `02:36:03` — wave chạy **ngược**. Lý do: ArgoCD mở cổng wave khi resource wave trước `Healthy`, mà một `Application` vừa tạo **chưa quản lý resource nào** ⇒ "không có resource" = Healthy ⇒ cả 3 wave qua trong ~3 giây. **Sync-wave chỉ là hàng rào thật khi các resource nằm trong CÙNG một Application** (nên `sync-wave: "-1"` cho ExternalSecret thì *có* hiệu lực).
+- **Hàng rào thật = `initContainer` ở tầng kubelet.** `charts/service` chờ `nc -z` đủ 5 datastore (danh sách lấy từ `DATASTORE_WAIT` trong `app-config`, ghép từ `dataNamespace` ⇒ đổi env sửa 1 dòng, không phải 18 file). `waitForDatastores: false` cho `eureka-server` (7 svc đăng ký vào nó lúc boot, phải lên sớm nhất) và `frontend` (nginx, không có `envFrom.configMap`).
+  - **Timeout bắt buộc**: hết `waitTimeoutSeconds` thì `exit 0` để app tự thử. Không có nó thì một cổng bị NetworkPolicy chặn (đã xảy ra với RabbitMQ 61613 ở Day 2) làm pod kẹt `Init:0/1` **vĩnh viễn** — hỏng nặng hơn crashloop.
+  - **Thiếu `DATASTORE_WAIT` thì `exit 1`, KHÔNG `exit 0`**: `envFrom` chỉ phân giải **một lần** lúc container start, mà `platform` và service là 2 Application sync song song ⇒ pod có thể sinh trước ConfigMap ⇒ hàng rào **tự tắt trong im lặng**. `exit 1` để kubelet thử lại và tự khỏi.
+- **ExternalSecret nhúng vào `charts/platform` + `infra`, KHÔNG có thư mục `external-secrets/`** — Secret sống ở **4 namespace** mà một Application chỉ khai được **một** `destination.namespace`; tách ra thư mục riêng thì phải đẻ thêm 4 Application chỉ để nạp secret.
+- **ESO: `apiVersion: v1`** (`v1beta1` bị gỡ ở ESO 0.17.0; ở 0.16.x webhook tự chuyển ⇒ ArgoCD OutOfSync vĩnh viễn). **`dataFrom.find` phải có `name.regexp`** (`path` không phải toán tử tìm kiếm → `unexpected find operator`) **và phải có `rewrite`** (ESO trả key kèm nguyên path, mà key Secret không được chứa `/`).
+- **2 param SSM mới**: `MONGODB_ROOT_PASSWORD` + `RABBITMQ_ERLANG_COOKIE` — `eks-secret.sh` tự chế chúng bằng `sed`/`openssl`, mà **ESO không chạy script được**. Đổi lại, con regex "`@` cuối cùng" từng cắn ở Day 4 biến mất hẳn. SSM giờ có **10 tên × 2 env** (3 param optional cố tình không tạo).
+- **ApplicationSet cần `goTemplate: true` + `{{.svc}}`** — fasttemplate `{{svc}}` đã bị gỡ ở **ArgoCD 3.0**. Kèm `goTemplateOptions: [missingkey=error]` để gõ nhầm biến thì báo lỗi chứ không đẻ ra app tên `-staging`.
+- 🔴 **Đừng khai field bằng ĐÚNG giá trị mặc định trong manifest ArgoCD tự quản lý.** `directory: {recurse: false}` ở `root.yaml` làm `badmintonhub-root` **OutOfSync vĩnh viễn**: `false` là default nên API server áp `omitempty` và lược field đi ⇒ Git có / live không có. Không hỏng vận hành nhưng **giết mất tín hiệu**. *(Nghi can hay bị đổ oan: `kubectl.kubernetes.io/last-applied-configuration` — đã kiểm, ArgoCD **có** normalize nó, gỡ đi không hết OutOfSync.)*
+- **Nhãn: `-l env=<env>` ra 11 chứ không phải 9** — mọi Application mang thêm `tier: service|infra|platform`. Bản kế hoạch ghi 9 và **sai theo hướng nguy hiểm**: teardown chạy `argocd app delete -l env=staging`, selector chỉ khớp 9 service thì datastore ở lại, PVC không bị xoá và **EBS tiếp tục tính tiền**.
+
+### 💬 Claude đã làm ở phiên trước (Day 4) — giữ lại vì 7 phát hiện vẫn còn hiệu lực
 
 Viết toàn bộ deliverable Day 4 ở repo này, rồi **user tự gõ tay từng lệnh** deploy lên EKS thật (tôi không chạy lệnh nào lên cụm/AWS — chỉ `helm lint`/`helm template` để kiểm cú pháp). Chạy thật lộ ra **7 chỗ tài liệu sai hoặc thiếu**, tất cả đã sửa vào `.claude/rules/` + `docs/DAY4-EXPLAINED.md`:
 
@@ -242,3 +272,21 @@ Viết toàn bộ deliverable Day 4 ở repo này, rồi **user tự gõ tay t�
 **Bài học lớn nhất của Day 4** — bug nằm ở **chỗ giao nhau giữa 2 repo, không ở repo nào cả**: image chat-service đã default `FRONTEND_URL=*` (đúng), `charts/platform` phát `FRONTEND_URL` cho mọi service vì user-service cần nó cho link email (cũng đúng), nhưng **env tường minh thắng default của image** ⇒ cái đúng thứ hai giết cái đúng thứ nhất ⇒ WS 403. Chỉ nhìn thấy khi đặt hai repo cạnh nhau. Triệu chứng thì vô hại nhất có thể: **chat chết một mình, mọi thứ khác xanh.**
 
 **Chi phí thực đo**: buổi 2.5 giờ ≈ **$0.57** (≈ $0.22/giờ cụm sống). Bảng trong `ephemeral-cost.md` ghi "$0.15/buổi" — đúng với buổi gọn ~40 phút, không đúng với buổi vừa dựng vừa debug. Sau teardown còn **~$0.30/tháng**, toàn bộ là ECR 3.2 GB.
+
+### 💬 Claude đã làm trong phiên này (Day 6)
+
+Viết toàn bộ `apps/` + 2 ExternalSecret + `argocd-install.sh` + docs, rồi **đi cùng user từng bước một** lên cụm EKS thật (khác Day 4: phiên này tôi có chạy lệnh đọc lên cụm để chẩn đoán, nhưng mọi `git commit`/`push` đều do user tự làm).
+
+**Ba chỗ bản kế hoạch + rule của repo đã lỗi thời**, phát hiện khi verify docs *trước khi* viết code — nếu làm theo thì cả ba đều hỏng im lặng:
+1. `{{svc}}` → phải `goTemplate: true` + `{{.svc}}` (fasttemplate bị gỡ ở ArgoCD 3.0).
+2. `apiVersion: v1beta1` → phải `v1` (bị gỡ ở ESO 0.17.0; ở 0.16.x gây OutOfSync vĩnh viễn). Đọc `../badmintonHub/scripts/bootstrap.sh` mới biết đang ghim **ESO 2.8.0** ⇒ xác nhận `v1`.
+3. Thư mục `external-secrets/` riêng → nhúng vào 2 chart sẵn có (4 namespace vs 1 `destination.namespace`).
+
+**Ba bug chỉ lộ ra khi chạy thật**, đều đã sửa + ghi vào rules:
+1. **`unexpected find operator`** — `find.path` một mình không phải toán tử; ESO cần `find.name.regexp`. Bắt được nhờ **smoke test một ExternalSecret nháp trước khi thả cả cụm** — `ClusterSecretStore = Valid` không chứng minh đường fetch chạy được, và Day 4 có ESO `Valid` suốt mà bug này không lộ vì chưa có ExternalSecret nào tồn tại.
+2. **Service khởi động trước datastore 2'30"** → 6/9 svc mỗi env restart 1-3 lần với `UnknownHostException`. **Dự đoán "sync-wave sẽ cho RESTARTS 0" của tôi SAI** — wave giữa các Application không phải hàng rào. Sửa bằng initContainer ở tầng kubelet.
+3. **`badmintonhub-root` OutOfSync vĩnh viễn** — tôi đoán nhầm 2 lần (annotation `last-applied-configuration`, rồi client-side apply) trước khi so trực tiếp `spec` live với Git và thấy `directory: {recurse: false}` bị API server lược đi.
+
+**Bài học lớn nhất của Day 6** — **`Healthy` của một Application không có nghĩa là "đã sẵn sàng", nó có nghĩa là "không có gì đang hỏng"**. Một app chưa quản lý resource nào cũng `Healthy`. Mọi cơ chế xếp thứ tự dựa trên tín hiệu đó đều là gợi ý, không phải bảo đảm — muốn chắc thì hàng rào phải nằm ở tầng thấp hơn (kubelet), nơi có trạng thái thật để chờ.
+
+**Bài học phụ, rẻ tiền mà lặp lại nhiều lần**: hai lần dự đoán sai đều do **suy luận từ tài liệu thay vì đo**. Cả hai lần, một lệnh 30 giây (`smoke test ExternalSecret`, `so spec live với Git`) cho câu trả lời dứt khoát.
