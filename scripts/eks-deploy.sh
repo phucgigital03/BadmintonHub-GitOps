@@ -1,6 +1,13 @@
 #!/usr/bin/env bash
 # Deploy một env lên EKS: 5 datastore + ConfigMap/Ingress + 9 service.
 #
+# 🔴 ĐÃ BỊ THAY THẾ Ở DAY 6 — ĐỪNG CHẠY TRÊN CỤM CÓ ARGOCD.
+# Đường deploy chính thức bây giờ là `kubectl apply -f apps/root.yaml` (xem
+# docs/DAY6-EXPLAINED.md §2). ArgoCD với `selfHeal: true` sở hữu mọi object mà script này tạo;
+# chạy song song hai đường chỉ tạo ra tranh chấp và hiểu nhầm về trạng thái thật của cụm.
+#
+# Giữ lại cho đúng một tình huống: ArgoCD hỏng/chưa cài mà vẫn cần dựng cụm để debug.
+#
 # 📌 LẦN ĐẦU THÌ ĐỪNG CHẠY SCRIPT NÀY — gõ tay theo `docs/DAY4-EXPLAINED.md` §runbook.
 # Script chỉ là bản ghi lại đúng những lệnh trong runbook, dành cho lần rebuild thứ 2-3 khi
 # bạn đã hiểu từng bước. Nó `echo` mọi lệnh trước khi chạy để không thành hộp đen.

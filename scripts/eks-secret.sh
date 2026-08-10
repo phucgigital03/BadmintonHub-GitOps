@@ -3,11 +3,19 @@
 #   ns <env>        → app-secrets       (envFrom.secret của charts/service)
 #   ns data-<env>   → datastore-secrets (existingSecret của Postgres/Mongo/RabbitMQ)
 #
-# ⚠️ ĐÂY LÀ CẦU TẠM CỦA DAY 4, KHÔNG PHẢI THIẾT KẾ CUỐI.
-# Day 6 thay hẳn bằng External Secrets Operator + ClusterSecretStore đọc chính những param
-# này — lúc đó pod tự có Secret sau mỗi rebuild mà không ai phải chạy script nào. Vì tên
-# target Secret giữ nguyên (`app-secrets`, `datastore-secrets`) nên Day 6 KHÔNG phải sửa một
-# dòng values nào.
+# 🔴 ĐÃ BỊ THAY THẾ Ở DAY 6 — ĐỪNG CHẠY TRONG LUỒNG BÌNH THƯỜNG.
+# Từ Day 6, hai Secret này do ExternalSecret sinh ra:
+#   charts/platform/templates/externalsecret.yaml → app-secrets       @ ns <env>
+#   infra/templates/externalsecret.yaml           → datastore-secrets @ ns data-<env>
+# ESO đọc chính những param SSM dưới đây, nên pod tự có Secret sau mỗi rebuild mà không ai
+# phải chạy script nào. Tên target Secret giữ nguyên nên Day 6 không phải sửa dòng values nào.
+#
+# ⚠️ Chạy script này trên cụm có ArgoCD sẽ tạo ra một Secret KHÔNG ai quản lý, rồi ESO ghi đè
+#    lên (creationPolicy: Owner) — vô hại nhưng gây nhiễu khi debug.
+#
+# Giữ lại vì 2 việc: (1) dựng tay khi ArgoCD/ESO hỏng, (2) đối chiếu xem SSM có đủ param chưa.
+# ⚠️ Script này CHƯA biết 2 param mới của Day 6 (MONGODB_ROOT_PASSWORD, RABBITMQ_ERLANG_COOKIE)
+#    — nó vẫn tự tách/sinh như cũ, nên kết quả tương đương chứ không giống hệt ESO.
 #
 # Vì sao vẫn đọc từ SSM chứ không từ .env local như kind:
 #   1. Đó là nguồn sự thật mà Day 6 sẽ dùng → nếu SSM thiếu param, ta biết NGAY hôm nay,
