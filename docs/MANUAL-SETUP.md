@@ -299,7 +299,8 @@ curl -s http://<ALB-DNS>/api/actuator/health         # 200
 
 ```bash
 kubectl get externalsecret -A                       # tất cả SecretSynced
-kubectl get applications -n argocd -l env=staging   # ĐÚNG 9 app
+kubectl get applications -n argocd -l env=staging                # 11 (cả môi trường)
+kubectl get applications -n argocd -l env=staging,tier=service  # 9  (chỉ service)
 argocd app list                                     # 20 app (18 child + infra + ingress), Synced/Healthy
 ```
 

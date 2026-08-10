@@ -896,7 +896,7 @@ spec:
 >
 > ℹ️ Multi-source + `$values` cần **ArgoCD ≥ 2.6** (nên dùng 2.8+). Ghim version khi cài.
 
-✅ **Check**: đổi 1 dòng code → merge → **tự lên prod không thao tác tay**; `argocd app list` Healthy/Synced; `kubectl get applications -n argocd -l env=staging` ra **9** app; `kubectl get externalsecret -A` toàn bộ `SecretSynced`; rollback = `git revert` PR trong gitops repo.
+✅ **Check**: đổi 1 dòng code → merge → **tự lên prod không thao tác tay**; `argocd app list` Healthy/Synced; `kubectl get applications -n argocd -l env=staging` ra **11** app (9 service + infra + platform; thêm `,tier=service` để lọc còn 9); `kubectl get externalsecret -A` toàn bộ `SecretSynced`; rollback = `git revert` PR trong gitops repo.
 
 📋 **Prompt paste-ready — Day 6**
 ```text
@@ -915,7 +915,7 @@ Chốt-cứng:
   - Commit KHÔNG thêm Co-Authored-By.
 Plan-mode trước: xác nhận cấu trúc apps/ + liệt kê danh sách param SSM cần có cho mỗi env (JWT/Cloudinary/DB/Mongo URI/RabbitMQ/Google/SendGrid) và đối chiếu với env mà ConfigMap/Secret ở Day 2 đang dùng.
 Phạm vi: (1) apps/ root Application + ApplicationSet (labels + CreateNamespace) · (2) hướng dẫn cài ArgoCD (ghim version) · (3) ClusterSecretStore + external-secrets/<env>.yaml · (4) values/<svc>-{staging,prod}.yaml.
-DoD: `argocd app list` Synced/Healthy; `kubectl get applications -n argocd -l env=staging` ra 9 app; `kubectl get externalsecret -A` toàn bộ SecretSynced; CI bump staging → tự sync; PR promote prod → tự lên prod; rollback = git revert.
+DoD: `argocd app list` Synced/Healthy; `kubectl get applications -n argocd -l env=staging` ra 11 app (thêm ,tier=service để lọc còn 9); `kubectl get externalsecret -A` toàn bộ SecretSynced; CI bump staging → tự sync; PR promote prod → tự lên prod; rollback = git revert.
 ```
 
 ---

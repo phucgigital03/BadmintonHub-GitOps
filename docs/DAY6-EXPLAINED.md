@@ -249,8 +249,13 @@ kubectl get externalsecret -A
 
 
 # ─── B4. Nghiệm thu ───────────────────────────────────────────────────────────────
-kubectl get applications -n argocd -l env=staging      # ĐÚNG 9
-kubectl get applications -n argocd -l env=prod         # ĐÚNG 9
+kubectl get applications -n argocd                            # 23 = 18 svc + 2 infra + 2 platform + root
+kubectl get applications -n argocd -l env=staging              # 11 — CẢ môi trường staging
+kubectl get applications -n argocd -l env=staging,tier=service # 9  — chỉ service
+kubectl get applications -n argocd -l '!env'                   # 1  — badmintonhub-root
+# ⚠️ Bản kế hoạch ghi `-l env=staging` phải ra 9 — SAI, và sai theo hướng nguy hiểm:
+#    teardown chạy `argocd app delete -l env=staging`, selector chỉ khớp 9 service thì
+#    datastore ở lại, PVC không bị xoá, EBS tiếp tục tính tiền. 11 mới đúng.
 kubectl get applications -n argocd -o wide             # tất cả Synced / Healthy
 
 # Chỉ in TÊN KEY, KHÔNG BAO GIỜ in giá trị — transcript và ảnh chụp màn hình đều là nơi rò secret

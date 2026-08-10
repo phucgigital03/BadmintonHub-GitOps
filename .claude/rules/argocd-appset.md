@@ -34,6 +34,16 @@ spec:
         syncOptions: [ CreateNamespace=true ]   # ④ BẮT BUỘC
 ```
 
+Ngoài `env`/`svc`, mọi Application trong `apps/` còn mang **`tier: service | infra | platform`**:
+
+| Selector | Ra | Dùng khi |
+|---|---|---|
+| `-l env=staging` | **11** | teardown **cả môi trường** — 9 service + infra + platform |
+| `-l env=staging,tier=service` | **9** | chỉ động vào service |
+| `-l '!env'` | **1** | `badmintonhub-root` (không thuộc env nào) |
+
+> ⚠️ Bản kế hoạch ghi `-l env=staging` **phải ra 9**. Sai — và sai theo hướng nguy hiểm: nếu selector chỉ khớp 9 app service thì `argocd app delete -l env=staging` để **datastore ở lại**, PVC không bị xoá và **EBS tiếp tục tính tiền** sau teardown. 11 mới là con số đúng.
+
 | # | Bỏ đi thì sao |
 |---|---|
 | ① `labels` | Runbook teardown chạy `argocd app delete -l env=staging` → **match 0 app**, lệnh "thành công" mà không xoá gì |
@@ -125,9 +135,12 @@ argocd app delete badmintonhub-root --cascade
 ## Debug — đọc theo thứ tự này
 
 ```bash
-argocd app list                                          # tất cả phải Synced/Healthy
-kubectl get applications -n argocd -l env=staging        # phải ra ĐÚNG 9 app
-kubectl get applications -n argocd -o wide               # cột SYNC/HEALTH + message
+argocd app list                                              # tất cả phải Synced/Healthy
+kubectl get applications -n argocd                           # 23 = 18 service + 2 infra + 2 platform + root
+kubectl get applications -n argocd -l env=staging             # 11 — CẢ môi trường
+kubectl get applications -n argocd -l env=staging,tier=service # 9  — chỉ service
+kubectl get applications -n argocd -l '!env'                  # 1  — chỉ badmintonhub-root
+kubectl get applications -n argocd -o wide                   # cột SYNC/HEALTH + message
 argocd app get <svc>-<env>                               # xem condition/lỗi cụ thể
 kubectl -n argocd logs deploy/argocd-applicationset-controller --tail=100
 ```
