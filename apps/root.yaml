@@ -1,0 +1,47 @@
+# App-of-apps — ĐÂY LÀ FILE DUY NHẤT PHẢI `kubectl apply` BẰNG TAY.
+#
+# Sau lệnh đó, ArgoCD tự đọc cả thư mục apps/ và dựng mọi thứ còn lại: 2 app infra, 2 app
+# platform, 1 ApplicationSet sinh ra 18 app service. Không còn `helm install` nào bằng tay.
+#
+#   kubectl apply -f apps/root.yaml
+#
+# 🔴 Root quản lý CHÍNH THƯ MỤC CHỨA NÓ, nên nó tự quản lý luôn bản thân. Sửa file này rồi push
+#    thì ArgoCD tự áp dụng — trừ lần đầu tiên.
+#
+# 🔴 Muốn hạ cả cụm thì xoá ROOT, không xoá con:
+#      argocd app delete badmintonhub-root --cascade
+#    Xoá child app là vô nghĩa — ApplicationSet controller sinh lại ngay lập tức.
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: badmintonhub-root
+  namespace: argocd
+  finalizers:
+    # Không có finalizer này thì `--cascade` xoá Application nhưng BỎ LẠI object thật trên cụm:
+    # Ingress còn sống → ALB không bị AWS LB Controller gỡ → tiền vẫn chảy sau khi teardown.
+    - resources-finalizer.argocd.argoproj.io
+spec:
+  project: default
+
+  source:
+    repoURL: https://github.com/phucgigital03/BadmintonHub-GitOps
+    targetRevision: main
+    path: apps
+    directory:
+      # Chỉ đọc *.yaml ở tầng ngay trong apps/. Không recurse — thư mục con (nếu sau này có)
+      # phải được khai tường minh bằng một Application riêng.
+      recurse: false
+
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: argocd
+
+  syncPolicy:
+    automated:
+      # prune: xoá file khỏi apps/ = xoá app khỏi cụm.
+      prune: true
+      # selfHeal: `kubectl edit` tay bị kéo về đúng Git. Đây là rule 4 của gitops-workflow.md,
+      # không phải phiền toái — nó là thứ bảo đảm "cụm luôn khớp main".
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=true

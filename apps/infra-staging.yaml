@@ -1,0 +1,54 @@
+# 5 datastore Bitnami + ExternalSecret `datastore-secrets` → namespace data-staging.
+#
+# Chart `infra/` là umbrella có dependencies trỏ charts.bitnami.com. ArgoCD repo-server tự chạy
+# `helm dependency build` dựa trên infra/Chart.lock (đã commit) — vì thế .gitignore loại
+# infra/charts/*.tgz mà vẫn deploy được.
+# ⚠️ Nếu app này báo ComparisonError kiểu "found in Chart.yaml, but missing in charts/ directory"
+#    thì repo-server không ra được charts.bitnami.com. Xử: bỏ `infra/charts/` khỏi .gitignore và
+#    commit 5 file .tgz (~490 KB). Xem docs/DAY6-EXPLAINED.md.
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: infra-staging
+  namespace: argocd
+  labels:
+    env: staging
+    tier: infra
+  annotations:
+    # ⚠️ Wave 1 — datastore phải Healthy TRƯỚC khi ApplicationSet (wave 3) sinh 18 app service.
+    # Bỏ wave đi thì 18 JVM boot lúc Postgres/Kafka chưa tồn tại → RESTARTS tăng đều ở mọi pod
+    # → đúng cái "vòng lặp restart" mà helm-chart.md gọi là bài học đắt nhất của Day 2, và bạn
+    # sẽ đi đổ lỗi cho RAM node thay vì cho thứ tự deploy.
+    argocd.argoproj.io/sync-wave: "1"
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+spec:
+  project: default
+
+  # Single-source được: infra/values/infra-staging.yaml NẰM TRONG source.path (`infra`).
+  # (platform thì không — chart ở charts/platform còn values ở infra/values/ → phải multi-source.)
+  source:
+    repoURL: https://github.com/phucgigital03/BadmintonHub-GitOps
+    targetRevision: main
+    path: infra
+    helm:
+      valueFiles:
+        - values/infra-staging.yaml
+
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: data-staging
+
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      # Cụm vừa `terraform apply` CHƯA có ns data-staging.
+      - CreateNamespace=true
+    retry:
+      limit: 5
+      backoff:
+        duration: 20s
+        factor: 2
+        maxDuration: 5m

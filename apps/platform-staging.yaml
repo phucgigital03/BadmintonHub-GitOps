@@ -1,0 +1,55 @@
+# Object dùng chung của namespace staging: ConfigMap `app-config` + Ingress ALB +
+# ExternalSecret `app-secrets`.
+#
+# 🔴 PHẢI dùng multi-source: chart ở `charts/platform` còn values ở `infra/values/platform-*.yaml`
+#    — nằm NGOÀI source.path. Viết `valueFiles: ["../../infra/values/..."]` thì ArgoCD chặn thẳng:
+#    "valueFiles must be within the app path". Cách đúng là khai repo thêm một lần nữa với
+#    `ref: values` rồi tham chiếu bằng biến `$values`.
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: platform-staging
+  namespace: argocd
+  labels:
+    env: staging
+    tier: platform
+  annotations:
+    # Wave 2 — sau datastore (wave 1), trước service (wave 3).
+    # Đặt trước service có lý do thực tế: Ingress tạo sớm thì AWS bắt đầu provision ALB NGAY,
+    # chạy song song với lúc 9 JVM đang boot (~2-3 phút, vừa khớp) thay vì cộng dồn thời gian.
+    argocd.argoproj.io/sync-wave: "2"
+  finalizers:
+    # Quan trọng hơn ở app này: Ingress phải bị xoá thật thì AWS LB Controller mới gỡ ALB.
+    - resources-finalizer.argocd.argoproj.io
+spec:
+  project: default
+
+  sources:
+    # Nguồn 1: chỉ để làm "kho values", không render gì. `ref` biến nó thành biến $values.
+    - repoURL: https://github.com/phucgigital03/BadmintonHub-GitOps
+      targetRevision: main
+      ref: values
+    # Nguồn 2: chart thật.
+    - repoURL: https://github.com/phucgigital03/BadmintonHub-GitOps
+      targetRevision: main
+      path: charts/platform
+      helm:
+        valueFiles:
+          - $values/infra/values/platform-staging.yaml
+
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: staging
+
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=true
+    retry:
+      limit: 5
+      backoff:
+        duration: 20s
+        factor: 2
+        maxDuration: 5m

@@ -1,0 +1,50 @@
+# Object dùng chung của namespace prod. Giải thích multi-source ở apps/platform-staging.yaml.
+#
+# ⚠️ `infra/values/platform-prod.yaml` để `ingress.enabled: false` cho tới Day 8 — CÓ CHỦ ĐÍCH,
+# không phải quên. staging + prod chung `group.name: badminton` mà cùng `host: ""` thì AWS LB
+# Controller gộp rule và cái đứng sau không bao giờ khớp → traffic prod lặng lẽ chảy vào staging,
+# hai Ingress có ADDRESS giống hệt nhau, không lỗi không event.
+# Nên app này ở Day 6 chỉ sinh ConfigMap + ExternalSecret. Truy cập prod bằng:
+#   kubectl -n prod port-forward svc/frontend 8082:80
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: platform-prod
+  namespace: argocd
+  labels:
+    env: prod
+    tier: platform
+  annotations:
+    argocd.argoproj.io/sync-wave: "2"
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+spec:
+  project: default
+
+  sources:
+    - repoURL: https://github.com/phucgigital03/BadmintonHub-GitOps
+      targetRevision: main
+      ref: values
+    - repoURL: https://github.com/phucgigital03/BadmintonHub-GitOps
+      targetRevision: main
+      path: charts/platform
+      helm:
+        valueFiles:
+          - $values/infra/values/platform-prod.yaml
+
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: prod
+
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=true
+    retry:
+      limit: 5
+      backoff:
+        duration: 20s
+        factor: 2
+        maxDuration: 5m

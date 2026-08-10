@@ -1,0 +1,45 @@
+# 5 datastore Bitnami + ExternalSecret `datastore-secrets` → namespace data-prod.
+# Giải thích đầy đủ ở apps/infra-staging.yaml (cùng chart, chỉ khác values + namespace).
+#
+# ⚠️ Day 6 là lần ĐẦU TIÊN prod chạy thật. Từ đây node phải gánh 10 datastore + 18 service.
+# Theo dõi cột RESTARTS sau lần sync đầu — nếu tăng đều thì là vòng lặp restart, không phải
+# thiếu RAM (helm-chart.md §"Cụm chậm" gần như luôn là VÒNG LẶP RESTART).
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: infra-prod
+  namespace: argocd
+  labels:
+    env: prod
+    tier: infra
+  annotations:
+    argocd.argoproj.io/sync-wave: "1"
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+spec:
+  project: default
+
+  source:
+    repoURL: https://github.com/phucgigital03/BadmintonHub-GitOps
+    targetRevision: main
+    path: infra
+    helm:
+      valueFiles:
+        - values/infra-prod.yaml
+
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: data-prod
+
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=true
+    retry:
+      limit: 5
+      backoff:
+        duration: 20s
+        factor: 2
+        maxDuration: 5m

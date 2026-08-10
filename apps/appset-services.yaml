@@ -1,0 +1,98 @@
+# ApplicationSet — sinh 9 svc × 2 env = 18 child Application, tất cả trỏ vào MỘT chart
+# `charts/service`. Viết tay 18 file Application là chỗ để 18 lần sai khác nhau.
+#
+# 🔴 Xoá child app là VÔ NGHĨA — controller sinh lại ngay. Muốn hạ cụm thì xoá root
+#    (`argocd app delete badmintonhub-root --cascade`) hoặc chính ApplicationSet này.
+apiVersion: argoproj.io/v1alpha1
+kind: ApplicationSet
+metadata:
+  name: badmintonhub
+  namespace: argocd
+  annotations:
+    # ⚠️ Wave 3 — sinh 18 app service SAU khi datastore (wave 1) và ConfigMap/Secret (wave 2) đã
+    # Healthy. Đây là điểm khác biệt lớn nhất so với bản kế hoạch: ApplicationSet sinh app ĐỘC LẬP
+    # với root, nên nếu không chặn bằng wave thì 18 JVM cùng boot lúc Postgres/Kafka chưa tồn tại.
+    argocd.argoproj.io/sync-wave: "3"
+spec:
+  # 🔴 BẮT BUỘC từ ArgoCD 3.0 — cú pháp fasttemplate cũ ({{svc}}) ĐÃ BỊ GỠ.
+  # Bản kế hoạch và mọi ví dụ cũ trên mạng đều viết {{svc}}; trên ArgoCD 3.x nó không còn được
+  # thay thế nữa. Với goTemplate thì cú pháp là {{.svc}} — có DẤU CHẤM.
+  goTemplate: true
+  # missingkey=error: gõ nhầm tên biến (vd {{.service}}) thì ApplicationSet BÁO LỖI thay vì render
+  # ra chuỗi rỗng. Rất hợp với repo này — mọi bug đắt nhất ở đây đều là bug im lặng.
+  goTemplateOptions:
+    - missingkey=error
+
+  generators:
+    - matrix:
+        generators:
+          - list:
+              elements:
+                # 9 service — KỂ CẢ frontend. Cả 9 dùng chung charts/service; chart đã generic
+                # từ Day 2 (port, livenessPath/readinessPath, envFrom optional) đúng để phục vụ
+                # matrix này. Viết chart riêng cho FE/eureka là phá luôn ApplicationSet.
+                - svc: eureka-server
+                - svc: api-gateway
+                - svc: user-service
+                - svc: court-service
+                - svc: booking-service
+                - svc: payment-service
+                - svc: escrow-service
+                - svc: chat-service
+                - svc: frontend
+          - list:
+              elements:
+                # Chỉ staging + prod. `dev` là kind local, không có ArgoCD.
+                - env: staging
+                - env: prod
+
+  template:
+    metadata:
+      name: '{{.svc}}-{{.env}}'
+      labels:
+        # ⚠️ BẮT BUỘC. Runbook teardown chạy `argocd app delete -l env=staging`; thiếu label thì
+        # lệnh match 0 app, chạy "thành công" mà không xoá gì cả.
+        env: '{{.env}}'
+        svc: '{{.svc}}'
+        tier: service
+      finalizers:
+        - resources-finalizer.argocd.argoproj.io
+    spec:
+      project: default
+
+      # 🔴 Multi-source `$values`. Application đơn với valueFiles: ["../../values/..."] bị ArgoCD
+      # chặn: "valueFiles must be within the app path".
+      sources:
+        - repoURL: https://github.com/phucgigital03/BadmintonHub-GitOps
+          targetRevision: main
+          ref: values
+        - repoURL: https://github.com/phucgigital03/BadmintonHub-GitOps
+          targetRevision: main
+          path: charts/service
+          helm:
+            # 🔴 Đây là ĐẦU KIA của hợp đồng đặt tên `values/<svc>-<env>.yaml`.
+            # CI ở repo app ghi image.tag vào đúng đường dẫn này; dòng dưới đọc đúng đường dẫn đó.
+            # Đặt sai tên file = CI vẫn xanh, commit vẫn vào repo, app này ComparisonError —
+            # hoặc tệ hơn, deploy im lặng không xảy ra.
+            valueFiles:
+              - $values/values/{{.svc}}-{{.env}}.yaml
+
+      destination:
+        server: https://kubernetes.default.svc
+        namespace: '{{.env}}'
+
+      syncPolicy:
+        automated:
+          prune: true
+          selfHeal: true
+        syncOptions:
+          # ⚠️ BẮT BUỘC: cụm vừa terraform apply chưa có ns staging/prod. Thiếu → cả 18 child
+          # app Error "namespace not found", và vì đây là đường rebuild nên nó vỡ MỖI BUỔI DEMO.
+          - CreateNamespace=true
+        retry:
+          # JVM boot chậm và Eureka/datastore có thể chưa sẵn sàng ở lần thử đầu.
+          limit: 5
+          backoff:
+            duration: 20s
+            factor: 2
+            maxDuration: 5m
