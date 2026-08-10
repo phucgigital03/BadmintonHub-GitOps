@@ -29,18 +29,24 @@ Hệ quả cụ thể: **KHÔNG dùng SealedSecrets** (keypair khoá theo cụm)
 ## Runbook teardown §7.1 — ĐÚNG THỨ TỰ
 
 ```bash
-# 1. Xoá ROOT app, KHÔNG phải child — ApplicationSet controller sinh lại child ngay lập tức
+# 1. Xoá ROOT app, KHÔNG phải child — ApplicationSet controller sinh lại child ngay lập tức.
+#    --cascade kéo theo toàn bộ: 18 app service, 2 app platform (⇒ Ingress ⇒ ALB), 2 app infra.
+#    Chỉ ăn nếu các Application có finalizer resources-finalizer.argocd.argoproj.io (apps/ đã có).
 argocd app delete badmintonhub-root --cascade
-#    (hoặc: kubectl delete applicationset badmintonhub -n argocd)
+#    (hoặc: kubectl delete applicationset badmintonhub -n argocd  +  kubectl delete app -n argocd --all)
 
-# 1a. 🔴 GỠ POD TRƯỚC KHI XOÁ PVC — nếu không, bước 2 TREO VÔ HẠN (xem mục dưới).
-#     Day 2-4 chưa có ArgoCD thì đây là cách duy nhất; có ArgoCD rồi thì bước 1 đã lo phần này,
-#     nhưng vẫn phải ĐỢI pod biến mất thật (kubectl -n data-<env> get pods → rỗng).
-helm uninstall infra -n data-staging
-helm uninstall infra -n data-prod
+# 1a. 🔴 ĐỢI POD BIẾN MẤT THẬT trước khi xoá PVC — nếu không, bước 2 TREO VÔ HẠN (xem mục dưới).
+#     Từ Day 6, ArgoCD sở hữu `infra` nên bước 1 đã lo phần gỡ pod. Nhưng "đã ra lệnh xoá" khác
+#     "đã xoá xong" — phải nhìn thấy RỖNG bằng mắt:
+kubectl -n data-staging get pods
+kubectl -n data-prod    get pods
+#     Trước Day 6 (chưa có ArgoCD) thì đây là cách duy nhất:
+#       helm uninstall infra -n data-staging  &&  helm uninstall infra -n data-prod
 
 # 2. Xoá PVC KHI CỤM CÒN SỐNG — reclaim policy Delete chỉ chạy lúc PVC bị xoá.
 #    Destroy thẳng cụm thì không ai gọi nó → EBS mồ côi VẪN TÍNH TIỀN.
+#    ⚠️ PVC do volumeClaimTemplates của StatefulSet sinh ra KHÔNG bị ArgoCD prune và cũng không
+#       bị `helm uninstall` xoá — bước này không bao giờ bỏ được, kể cả khi đã có ArgoCD.
 kubectl delete pvc --all -n data-staging
 kubectl delete pvc --all -n data-prod
 

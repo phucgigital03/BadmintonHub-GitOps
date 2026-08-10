@@ -138,13 +138,18 @@ docker buildx version  # BẮT BUỘC
 
 ---
 
-## §3 — 22 SSM parameter (11 tên × 2 env)
+## §3 — 20 SSM parameter (10 tên × 2 env, + 3 tên CỐ TÌNH không tạo)
 
 Đường dẫn: **`/badminton/<env>/<TÊN>`**, `env ∈ {staging, prod}`, type **`SecureString`**, tier **Standard** (free).
 
+> 🆕 **Day 6 sửa lại con số này.** Bản cũ ghi "22 param (11 tên)". Thực tế sau khi chạy thật:
+> - **+2 tên mới**: `MONGODB_ROOT_PASSWORD` và `RABBITMQ_ERLANG_COOKIE`. `scripts/eks-secret.sh` của Day 4 tự chế ra chúng bằng `sed`/`openssl`; **ESO không chạy script được** nên chúng phải thành param thật. Bù lại, con regex `@`-cuối-cùng từng cắn ở Day 4 biến mất hẳn.
+> - **−3 tên KHÔNG tạo**: `SENDGRID_API_KEY`, `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`. SSM **từ chối giá trị rỗng** (`ValidationException: length ≥ 1`), mà 3 cái này chưa có giá trị thật. Chart tự bơm key rỗng vào Secret (`externalSecret.optionalKeys`) để Spring resolve được `${...}`.
+> - 🔴 Ngày nào nạp giá trị **thật** cho 1 trong 3 cái đó, **phải xoá tên nó khỏi `optionalKeys`** trong `charts/platform/values.yaml`, không thì giá trị thật bị ghi đè rỗng **trong im lặng**.
+
 Vì sao SSM chứ không phải SealedSecrets: param **sống ngoài cụm** → `terraform destroy` không xoá → rebuild là có secret ngay, **0 thao tác tay**. SealedSecrets sinh keypair mới mỗi lần cài cụm → mọi SealedSecret đã commit thành rác (`.claude/rules/secrets-eso.md`).
 
-### 3a. Năm param **bạn tự nghĩ ra**
+### 3a. Bảy param **bạn tự nghĩ ra**
 
 | Tên | Giá trị lấy ở đâu |
 |---|---|
@@ -152,9 +157,13 @@ Vì sao SSM chứ không phải SealedSecrets: param **sống ngoài cụm** →
 | `POSTGRES_USERNAME` | **`postgres`** — superuser, vì `ddl-auto=update` cần quyền tạo schema và app chỉ có **một** cặp user/pass cho cả 5 DB |
 | `POSTGRES_PASSWORD` | Bạn đặt (`openssl rand -base64 24`) |
 | `RABBITMQ_PASS` | Bạn đặt. *(`RABBITMQ_USER=badminton` là **non-secret → ConfigMap**, đừng nhét vào SSM)* |
+| **`RABBITMQ_ERLANG_COOKIE`** 🆕 | `openssl rand -hex 16`. Đặt 1 lần rồi **đừng đổi** khi cụm đang sống: RabbitMQ ghi cookie vào PVC lúc khởi tạo, cookie đổi mà PVC còn data cũ thì node không nhận ra chính mình và boot fail bằng lỗi Erlang khó đọc |
+| **`MONGODB_ROOT_PASSWORD`** 🆕 | Chính là `<mongo-pass>` bạn sắp nhét vào `MONGODB_CHAT_URI` ở dòng dưới |
 | `MONGODB_CHAT_URI` | Bạn ghép: `mongodb://root:<mongo-pass>@mongodb.data-<env>.svc.cluster.local:27017/chat_db?authSource=admin` |
 
 > 🔴 **Thiếu `?authSource=admin` = auth fail ngay lúc boot.** Root user của Bitnami MongoDB nằm ở db `admin`, không phải `chat_db`.
+
+> 🔴 **`MONGODB_ROOT_PASSWORD` phải TRÙNG `<mongo-pass>` nhúng trong `MONGODB_CHAT_URI`** của cùng env. Không có gì tự kiểm được điều này. Lệch nhau ⇒ Mongo được dựng bằng mật khẩu A, chat-service kết nối bằng mật khẩu B ⇒ auth fail lúc boot, log chỉ nói `Authentication failed` và bạn sẽ đi soi `?authSource=admin` (vốn đang đúng). Cách an toàn: đặt biến shell một lần rồi dùng lại cho cả hai lệnh `put-parameter`.
 
 > ⚠️ **Bẫy sẽ cắn ở Day 4, ghi lại từ bây giờ.** Ba giá trị `POSTGRES_PASSWORD`, `RABBITMQ_PASS`, và mật khẩu Mongo nhúng trong `MONGODB_CHAT_URI` phải **khớp ở HAI nơi**:
 > - **(a)** SSM — để app đọc qua `ExternalSecret`
@@ -162,29 +171,45 @@ Vì sao SSM chứ không phải SealedSecrets: param **sống ngoài cụm** →
 >
 > Để Bitnami tự sinh password ngẫu nhiên là app auth fail 100%, và triệu chứng chỉ là "pod `CrashLoopBackOff`" không nói gì về nguyên nhân. **Hướng chốt: chart Bitnami dùng `existingSecret` trỏ vào chính Secret do ESO sinh ra** — hiện thực ở Day 2 (values `infra/`) và nối dây ở Day 6.
 
-### 3b. Sáu param **lấy từ third-party** (§2)
+### 3b. Param **lấy từ third-party** (§2)
 
-`CLOUDINARY_CLOUD_NAME` · `CLOUDINARY_API_KEY` · `CLOUDINARY_API_SECRET` · `SENDGRID_API_KEY` · `GOOGLE_CLIENT_ID` · `GOOGLE_CLIENT_SECRET`
+**Nạp (3):** `CLOUDINARY_CLOUD_NAME` · `CLOUDINARY_API_KEY` · `CLOUDINARY_API_SECRET` — bắt buộc, thiếu là `payment-service`/`chat-service` fail boot ở profile `prod`.
+
+**KHÔNG nạp (3):** `SENDGRID_API_KEY` · `GOOGLE_CLIENT_ID` · `GOOGLE_CLIENT_SECRET` — chưa có giá trị thật, mà SSM từ chối giá trị rỗng. Chart bơm sẵn key rỗng vào Secret. Có giá trị thật rồi thì nạp param **và** xoá tên khỏi `externalSecret.optionalKeys` (`charts/platform/values.yaml`).
 
 ### 3c. Nạp — chọn một trong hai đường
 
-**Console:** Systems Manager → **Parameter Store** → *Create parameter* → Name `/badminton/staging/JWT_SECRET` → Tier **Standard** → Type **SecureString** → KMS key `alias/aws/ssm` → Value → *Create parameter*. Lặp 22 lần.
+**Console:** Systems Manager → **Parameter Store** → *Create parameter* → Name `/badminton/staging/JWT_SECRET` → Tier **Standard** → Type **SecureString** → KMS key `alias/aws/ssm` → Value → *Create parameter*. Lặp 20 lần.
 
 **CLI (nhanh hơn nhiều):**
 ```bash
-# ví dụ 2 param; lặp cho đủ 11 tên, rồi lặp cả cây cho env prod
-aws ssm put-parameter --type SecureString --name /badminton/staging/JWT_SECRET \
-  --value "$(openssl rand -hex 64)"
-aws ssm put-parameter --type SecureString --name /badminton/staging/POSTGRES_USERNAME \
-  --value 'postgres'
-# … CLOUDINARY_CLOUD_NAME/API_KEY/API_SECRET · SENDGRID_API_KEY
-#     GOOGLE_CLIENT_ID/GOOGLE_CLIENT_SECRET · POSTGRES_PASSWORD · RABBITMQ_PASS · MONGODB_CHAT_URI
-```
+ENV=staging          # rồi lặp lại toàn bộ với ENV=prod
+put() { aws ssm put-parameter --type SecureString --overwrite \
+          --name "/badminton/$ENV/$1" --value "$2" >/dev/null && echo "  ✅ $1"; }
 
-**Verify — phải ra đủ 11 tên cho mỗi env:**
+# 🔑 Mongo: sinh MỘT password rồi dùng lại cho CẢ HAI param — đây là cách duy nhất bảo đảm
+#    MONGODB_ROOT_PASSWORD và mật khẩu nhúng trong MONGODB_CHAT_URI không bao giờ lệch nhau.
+MONGO_PASS="$(openssl rand -hex 24)"
+
+put JWT_SECRET             "$(openssl rand -hex 64)"
+put POSTGRES_USERNAME      'postgres'
+put POSTGRES_PASSWORD      "$(openssl rand -hex 24)"
+put RABBITMQ_PASS          "$(openssl rand -hex 24)"
+put RABBITMQ_ERLANG_COOKIE "$(openssl rand -hex 16)"
+put MONGODB_ROOT_PASSWORD  "$MONGO_PASS"
+put MONGODB_CHAT_URI       "mongodb://root:${MONGO_PASS}@mongodb.data-${ENV}.svc.cluster.local:27017/chat_db?authSource=admin"
+put CLOUDINARY_CLOUD_NAME  '<từ Cloudinary Dashboard>'
+put CLOUDINARY_API_KEY     '<từ Cloudinary Dashboard>'
+put CLOUDINARY_API_SECRET  '<từ Cloudinary Dashboard>'
+# SENDGRID_API_KEY / GOOGLE_CLIENT_ID / GOOGLE_CLIENT_SECRET: CỐ TÌNH KHÔNG TẠO (xem 3b)
+```
+> ⚠️ `openssl rand -hex` chứ không `-base64`: giá trị hex không bao giờ chứa `@`, `/`, `+` nên nhúng vào URI Mongo là an toàn. Chính dấu `@` trong password base64 đã tạo ra con bug regex ở Day 4.
+
+**Verify — phải ra đủ 10 tên cho mỗi env:**
 ```bash
 aws ssm get-parameters-by-path --path /badminton/staging/ --query 'Parameters[].Name' --output table
 aws ssm get-parameters-by-path --path /badminton/prod/    --query 'Parameters[].Name' --output table
+# Hoặc để scripts/argocd-install.sh tự đối chiếu — nó in ra đúng tên nào còn thiếu.
 ```
 
 > ⚠️ Khi debug secret: **in ra KEY, không in VALUE.** Đừng `base64 -d` rồi để giá trị nằm trong transcript hay ảnh chụp màn hình.
@@ -269,7 +294,7 @@ curl -s http://<ALB-DNS>/api/actuator/health         # 200
 
 | Kiểm | Console → | Phải thấy |
 |---|---|---|
-| 22 param | **Systems Manager → Parameter Store** | 22 dòng `/badminton/{staging,prod}/*`, Type **SecureString** |
+| 20 param | **Systems Manager → Parameter Store** | 20 dòng `/badminton/{staging,prod}/*`, Type **SecureString** |
 | **ESO thật sự đọc được** | **CloudTrail → Event history** → lọc *Event name* = `GetParameters` | Có event, User name = role IRSA của `external-secrets`. Đây là **cross-check độc lập với `kubectl`**: chứng minh IRSA + KMS + policy đều đúng, chứ không phải Secret cũ còn sót lại trong cụm |
 
 ```bash
@@ -336,7 +361,7 @@ aws elbv2 describe-load-balancers --query 'LoadBalancers[].LoadBalancerName'    
 | **S3** | Bucket state | Terraform mất state → không destroy được stack cũ |
 | **DynamoDB** | Bảng lock | — |
 | **ECR** | 9 repo + image | **Build lại toàn bộ 9 image** |
-| **Systems Manager → Parameter Store** | 22 param | **Nạp lại toàn bộ secret bằng tay** |
+| **Systems Manager → Parameter Store** | 20 param | **Nạp lại toàn bộ secret bằng tay** |
 | **Route 53** | Hosted zone *(Day 8)* | Đổi NS lại + chờ 1–48h |
 | **Certificate Manager** | ACM cert *(Day 8)* | Xin + validate lại cert |
 
@@ -353,7 +378,7 @@ aws elbv2 describe-load-balancers --query 'LoadBalancers[].LoadBalancerName'    
 | Resource | Ai tạo | Sống sót `destroy`? | Tốn tiền khi cụm đã tắt? |
 |---|---|---|---|
 | AWS account · IAM user · Budget alert | 🖐 **Tay** | ✅ | Không |
-| 22 SSM parameter | 🖐 **Tay** (1 lần) | ✅ | **Không** (standard = free) |
+| 20 SSM parameter (10 tên × 2 env) | 🖐 **Tay** (1 lần) | ✅ | **Không** (standard = free) |
 | Key Cloudinary / SendGrid / Google | 🖐 **Tay** (third-party) | ✅ | Không |
 | GitHub repo · 5 Actions secret · branch protection | 🖐 **Tay** | ✅ | Không |
 | Domain (đăng ký) | 🖐 **Tay** | ✅ | ~$13/năm |

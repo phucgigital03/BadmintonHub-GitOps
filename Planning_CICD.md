@@ -795,7 +795,22 @@ DoD: mở PR → CI validate xanh, KHÔNG đẩy ECR/bump; merge vào main → i
 
 ### Day 6 — GitOps CD + promote (ArgoCD)
 
-> 🗂 **Repo: `badmintonHub-gitops`** — `apps/` + `external-secrets/` sống ở đây.
+> 🗂 **Repo: `badmintonHub-gitops`** — `apps/` sống ở đây.
+
+> 🔴 **ĐÃ THỰC THI — 4 chỗ dưới đây LỆCH so với bản kế hoạch này. Bản đã build mới đúng.**
+> Nguồn sự thật: [`.claude/rules/argocd-appset.md`](.claude/rules/argocd-appset.md) ·
+> [`.claude/rules/secrets-eso.md`](.claude/rules/secrets-eso.md) · [`docs/DAY6-EXPLAINED.md`](docs/DAY6-EXPLAINED.md).
+>
+> | Kế hoạch viết | Thực tế đã build | Vì sao |
+> |---|---|---|
+> | `{{svc}}` trong ApplicationSet | **`goTemplate: true`** + `{{.svc}}` | fasttemplate **bị gỡ ở ArgoCD 3.0**; repo ghim v3.5.0 |
+> | thư mục `external-secrets/` riêng | ExternalSecret **nhúng trong `charts/platform` + `infra`** | Secret ở 4 namespace, mà 1 Application chỉ khai được 1 `destination.namespace` |
+> | `apiVersion: external-secrets.io/v1beta1` | **`v1`** | v1beta1 **bị gỡ ở ESO 0.17.0**; ở 0.16.x thì webhook tự chuyển ⇒ ArgoCD OutOfSync vĩnh viễn |
+> | `dataFrom.find` trần | + **`rewrite`** bắt buộc | ESO trả key kèm nguyên path `/badminton/…`, mà key Secret không được chứa `/` |
+>
+> Thêm 2 thứ kế hoạch không có: **sync-wave giữa các Application** (1 infra → 2 platform → 3 services)
+> và **2 param SSM mới** (`MONGODB_ROOT_PASSWORD`, `RABBITMQ_ERLANG_COOKIE`) thay cho 2 việc mà
+> `eks-secret.sh` tự chế bằng `sed`/`openssl` — ESO không chạy script được.
 
 **Mục tiêu**: đóng vòng lặp GitOps — commit → tự lên EKS; promote staging→prod bằng PR.
 

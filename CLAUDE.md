@@ -7,7 +7,7 @@ Repo **desired-state (GitOps)** cho nền tảng BadmintonHub. **KHÔNG chứa s
 > **hỏi user** — user đã handoff đủ ở `../badmintonHub/CLAUDE.md`. Đừng copy/snapshot sang repo này.
 > Kế hoạch đầy đủ + lộ trình 7 ngày (+ Day 8 gắn domain) + prompt paste-ready mỗi Day: xem **`Planning_CICD.md`**.
 > Bức tranh tổng quát hệ thống (hạ tầng AWS · 1 ALB 2 namespace · secret/storage · vòng đời request & buổi demo): xem **[`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md)**.
-> Thao tác tay phải tự làm (AWS Console · GitHub · third-party API key · 22 SSM param) + bản đồ verify Console theo Day: xem **[`docs/MANUAL-SETUP.md`](docs/MANUAL-SETUP.md)**.
+> Thao tác tay phải tự làm (AWS Console · GitHub · third-party API key · 20 SSM param) + bản đồ verify Console theo Day: xem **[`docs/MANUAL-SETUP.md`](docs/MANUAL-SETUP.md)**.
 
 ## Rules Index
 
@@ -60,15 +60,18 @@ charts/service/     # Day 2 ✅ — 1 Helm chart tái sử dụng cho CẢ 9 ser
                     #            (Deployment + Service + probe + envFrom optional; tên object lấy từ
                     #             nameOverride, KHÔNG từ Release.Name — xem §Bẫy tên Service)
 charts/platform/    # Day 2 ✅ — object dùng chung 1 namespace app: ConfigMap app-config (Day 2),
-                    #            Ingress ALB (Day 4), ExternalSecret (Day 6)
+                    #            Ingress ALB (Day 4), ExternalSecret app-secrets (Day 6)
 values/             # Day 2 ✅ — 27 file <svc>-<env>.yaml (9 svc × 3 env)
 infra/              # Day 2 ✅ — umbrella chart 5 datastore Bitnami (GHIM version) → ns data-<env>
+                    #            + ExternalSecret datastore-secrets (Day 6)
                     #            values/infra-<env>.yaml   : override datastore
                     #            values/platform-<env>.yaml: env của app-config (+ Day 4 thêm 2 CÔNG TẮC
                     #                                        ingress host/certificateArn, mặc định "")
 scripts/            # Day 2 ✅ — kind-up.sh · kind-secret.sh · kind-deploy.sh
-apps/               # Day 6 — ArgoCD Application/ApplicationSet (app-of-apps: staging + prod)
-external-secrets/   # Day 6 — ExternalSecret: CHỈ ref tên param SSM, không chứa giá trị
+                    # Day 4 ✅ — eks-secret.sh · eks-deploy.sh (ArgoCD đã thay thế, giữ để debug)
+                    # Day 6 ✅ — argocd-install.sh
+apps/               # Day 6 ✅ — app-of-apps: root.yaml + infra-<env> (wave 1) + platform-<env> (wave 2)
+                    #            + appset-services.yaml (wave 3 → 9 svc × 2 env = 18 child)
 docs/               # Tài liệu — ARCHITECTURE.md: bức tranh tổng quát hệ thống (góc nhìn hạ tầng)
                     #            MANUAL-SETUP.md: checklist thao tác tay (account/IAM/API key/SSM param/
                     #            GitHub secret) + bản đồ verify AWS Console theo Day + verify bill về 0
@@ -76,7 +79,14 @@ docs/               # Tài liệu — ARCHITECTURE.md: bức tranh tổng quát 
                     #            chạy thật (nhóm theo loại sai lầm) + khái niệm K8s/Helm cần học + tự kiểm tra
                     #            DAY4-EXPLAINED.md: giải thích Day 4 + RUNBOOK lệnh rời để gõ tay
                     #            (Ingress≠ALB · target-type ip · ALB health-check là tầng THỨ TƯ · ECR amd64)
+                    #            DAY6-EXPLAINED.md: giải thích Day 6 + runbook (app-of-apps · goTemplate
+                    #            của ArgoCD 3.x · sync-wave · ESO rewrite/mergePolicy)
 ```
+
+> 🔴 **KHÔNG có thư mục `external-secrets/`** — bản kế hoạch cũ ghi thế, đã bỏ ở Day 6.
+> ExternalSecret sống ở **4 namespace** mà một ArgoCD Application chỉ khai được **một**
+> `destination.namespace` ⇒ tách ra thư mục riêng thì phải đẻ thêm 4 Application chỉ để nạp
+> secret. Nhúng vào chart thì Application nào tự tạo namespace của nó, tự nạp secret của nó.
 Remote: `github.com/phucgigital03/BadmintonHub-GitOps`.
 
 ### 🔴 Bẫy tên Service — lý do chart không dùng `.Release.Name`

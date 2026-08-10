@@ -317,7 +317,7 @@ Known open items, stated plainly: `staging`/`prod` values still carry placeholde
 |---|---|
 | [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) | Infrastructure view: browser → Route53 → ALB → EKS → pod → PVC → EBS; what survives `destroy` and what bills when idle |
 | [`docs/DAY2-EXPLAINED.md`](docs/DAY2-EXPLAINED.md) | All 13 findings, grouped by *class of mistake* rather than chronology — written for readers new to Kubernetes |
-| [`docs/MANUAL-SETUP.md`](docs/MANUAL-SETUP.md) | Every unavoidable manual step (AWS account, IAM, third-party keys, 22 SSM parameters) + a per-day console verification map |
+| [`docs/MANUAL-SETUP.md`](docs/MANUAL-SETUP.md) | Every unavoidable manual step (AWS account, IAM, third-party keys, 20 SSM parameters) + a per-day console verification map |
 | [`.claude/rules/`](.claude/rules/) | The 8 invariants, each with the failure it prevents and how to diagnose it |
 | `Planning_CICD.md` | Full design and the day-by-day execution plan |
 
