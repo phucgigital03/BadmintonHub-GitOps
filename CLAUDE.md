@@ -81,6 +81,8 @@ docs/               # Tài liệu — ARCHITECTURE.md: bức tranh tổng quát 
                     #            (Ingress≠ALB · target-type ip · ALB health-check là tầng THỨ TƯ · ECR amd64)
                     #            DAY6-EXPLAINED.md: giải thích Day 6 + runbook (app-of-apps · goTemplate
                     #            của ArgoCD 3.x · sync-wave · ESO rewrite/mergePolicy)
+                    #            REBUILD-RUNBOOK.md: 🔁 việc làm MỖI BUỔI — apply → bootstrap → ArgoCD →
+                    #            bấm nút → demo → teardown → verify bill. Đây là file mở ra mỗi lần dựng cụm.
 ```
 
 > 🔴 **KHÔNG có thư mục `external-secrets/`** — bản kế hoạch cũ ghi thế, đã bỏ ở Day 6.
@@ -204,10 +206,10 @@ Day 6 ArgoCD đặt release name = `<svc>-<env>` (vd `user-service-staging`). N�
   Mỗi service có vòng đời riêng nên tag khác nhau là đúng — **KHÔNG** build lại cho bằng nhau.
 
 ### 📋 Việc tiếp theo (theo thứ tự ưu tiên)
-1. **Teardown** theo `ephemeral-cost.md` §7.1 — thứ tự bắt buộc: xoá ApplicationSet + app → **đợi pod `data-*` RỖNG bằng mắt** → xoá PVC → xoá Ingress → `helm uninstall aws-lb-controller` → `terraform destroy` (repo app) → chạy bộ lệnh verify bill về 0.
-2. **Day 7** (cả 2 repo): observability (`kube-prometheus-stack` + Loki, thêm 1-2 file vào `apps/` với wave phù hợp) **+ diễn tập rebuild nguội** — đây chính là chỗ đóng nốt tiêu chí `RESTARTS 0` còn nợ. Thêm `micrometer-registry-prometheus` là việc **ở repo app**.
-3. **Day 8** (cả 2 repo): domain + HTTPS. Ở repo này chỉ là **2 dòng values × 2 env** (`ingress.host`, `ingress.certificateArn`) + `frontendUrl`, rồi bật `ingress.enabled: true` cho prod.
-4. Tuỳ chọn: promote nốt 8 svc Java prod lên `e496991` (trừ `frontend`, nó có vòng đời riêng).
+0. ✅ **Teardown Day 6 đã chạy xong** — `Destroy complete! Resources: 76 destroyed`, 10/10 mục verify rỗng. Buổi ≈ **$0.50** cho 2 giờ. Thường trực còn **~$0.46/tháng** (ECR 4.67 GB). **Lần dựng sau: mở [`docs/REBUILD-RUNBOOK.md`](docs/REBUILD-RUNBOOK.md)**, không phải hỏi lại.
+1. **Day 7** (cả 2 repo): observability (`kube-prometheus-stack` + Loki, thêm 1-2 file vào `apps/` với wave phù hợp) **+ diễn tập rebuild nguội** — đây chính là chỗ đóng nốt tiêu chí `RESTARTS 0` còn nợ. Thêm `micrometer-registry-prometheus` là việc **ở repo app**.
+2. **Day 8** (cả 2 repo): domain + HTTPS. Ở repo này chỉ là **2 dòng values × 2 env** (`ingress.host`, `ingress.certificateArn`) + `frontendUrl`, rồi bật `ingress.enabled: true` cho prod.
+3. Tuỳ chọn: promote nốt 8 svc Java prod lên `e496991` (trừ `frontend`, nó có vòng đời riêng).
 
 **Việc thuộc repo app, ghi lại để không quên** (không chặn Day 5/6):
 - `court-service` `GlobalExceptionHandler` map `HttpRequestMethodNotSupportedException` → **500** thay vì 405.
