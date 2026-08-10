@@ -26,6 +26,58 @@ spec:
       # gateway vẫn route vào đó = 5xx trước mặt khán giả. preStop sleep để pod ngừng nhận traffic
       # mới nhưng vẫn phục vụ request đang dở trong lúc Eureka/Endpoints hội tụ.
       terminationGracePeriodSeconds: 45
+      {{- if .Values.waitForDatastores }}
+      # ─────────────────────────────── HÀNG RÀO KHỞI ĐỘNG (Day 6) ───────────────────────────────
+      # Chặn JVM chạy cho tới khi mọi datastore đã MỞ CỔNG. Pod đứng ở Init, không boot, không
+      # chết, không restart, không đốt CPU.
+      #
+      # 🔴 Vì sao KHÔNG dựa vào sync-wave của ArgoCD (đã đo thật ở Day 6):
+      #    18 pod service sinh lúc 02:33:31, 10 pod datastore mãi 02:36:03 — sớm hơn 2'30".
+      #    Spring chết với `UnknownHostException: postgresql.data-<env>.svc.cluster.local`
+      #    (DNS chưa có, KHÔNG phải connection refused) → exit → kubelet restart.
+      #    Nguyên nhân: ArgoCD mở cổng wave khi resource của wave trước Healthy, mà một
+      #    Application vừa tạo chưa quản lý resource nào ⇒ "không có resource" = Healthy ⇒
+      #    cổng mở trong ~3 giây. sync-wave là best-effort, KHÔNG phải hàng rào.
+      #
+      # ⚠️ Có TIMEOUT có chủ đích: hết ngân sách thì initContainer thoát 0 và để app tự thử.
+      #    Không có timeout thì một cổng bị NetworkPolicy chặn (đã từng xảy ra với RabbitMQ
+      #    61613 ở Day 2) sẽ làm pod kẹt Init VĨNH VIỄN — hỏng nặng hơn crashloop, vì crashloop
+      #    ít ra còn tự khỏi và còn log để đọc.
+      initContainers:
+        - name: wait-datastores
+          image: {{ .Values.waitImage }}
+          # Lấy DATASTORE_WAIT từ ConfigMap app-config — chuỗi host:port do charts/platform ghép
+          # từ dataNamespace, nên đổi env không phải sửa file values nào.
+          envFrom:
+            - configMapRef:
+                name: {{ required "waitForDatastores cần envFrom.configMap" .Values.envFrom.configMap }}
+          command: ["sh", "-c"]
+          args:
+            - |
+              if [ -z "$DATASTORE_WAIT" ]; then
+                echo "DATASTORE_WAIT rỗng — bỏ qua hàng rào"; exit 0
+              fi
+              deadline=$(( $(date +%s) + {{ .Values.waitTimeoutSeconds }} ))
+              for hp in $DATASTORE_WAIT; do
+                host=${hp%:*}; port=${hp##*:}
+                printf 'chờ %s:%s ' "$host" "$port"
+                while ! nc -z "$host" "$port" 2>/dev/null; do
+                  if [ "$(date +%s)" -ge "$deadline" ]; then
+                    echo "HẾT GIỜ sau {{ .Values.waitTimeoutSeconds }}s — bỏ hàng rào, để app tự thử"
+                    exit 0
+                  fi
+                  printf '.'; sleep 2
+                done
+                echo " ok"
+              done
+              echo "tất cả datastore đã mở cổng"
+          resources:
+            requests:
+              memory: 16Mi
+              cpu: 10m
+            limits:
+              memory: 32Mi
+      {{- end }}
       containers:
         - name: {{ include "service.name" . }}
           image: "{{ required "image.repository bắt buộc" .Values.image.repository }}:{{ required "image.tag bắt buộc (git SHA, KHÔNG dùng latest)" .Values.image.tag }}"

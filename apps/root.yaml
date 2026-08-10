@@ -3,7 +3,16 @@
 # Sau lệnh đó, ArgoCD tự đọc cả thư mục apps/ và dựng mọi thứ còn lại: 2 app infra, 2 app
 # platform, 1 ApplicationSet sinh ra 18 app service. Không còn `helm install` nào bằng tay.
 #
-#   kubectl apply -f apps/root.yaml
+#   kubectl apply --server-side -f apps/root.yaml
+#
+# 🔴 `--server-side` KHÔNG phải tuỳ chọn cho đẹp — đo thật ở Day 6.
+#    `kubectl apply` thường (client-side) nhét annotation `kubectl.kubernetes.io/last-applied-configuration`
+#    vào object. Annotation đó không có trong Git, mà root TỰ QUẢN LÝ CHÍNH NÓ ⇒ ArgoCD so
+#    desired (Git) với live (có annotation) thấy khác nhau ⇒ `badmintonhub-root` đứng
+#    **OutOfSync vĩnh viễn** trong khi cả 22 app con đều Synced/Healthy.
+#    Không hỏng gì về vận hành, nhưng làm hỏng thứ đắt hơn: tín hiệu. Từ đó trở đi "có app
+#    OutOfSync" không còn nghĩa là "có gì đó sai" nữa.
+#    Server-side apply ghi field ownership vào metadata.managedFields thay vì annotation → hết lệch.
 #
 # 🔴 Root quản lý CHÍNH THƯ MỤC CHỨA NÓ, nên nó tự quản lý luôn bản thân. Sửa file này rồi push
 #    thì ArgoCD tự áp dụng — trừ lần đầu tiên.

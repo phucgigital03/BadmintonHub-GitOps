@@ -48,20 +48,43 @@ ApplicationSet có 2 engine template. Bản cũ (fasttemplate, `{{svc}}` **khôn
 
 Kèm theo `goTemplateOptions: [ missingkey=error ]` — gõ nhầm tên biến (vd `{{.service}}`) thì ApplicationSet **báo lỗi** thay vì render ra chuỗi rỗng và sinh ra app tên `-staging`. Đúng tinh thần repo này: mọi bug đắt nhất ở đây đều là bug im lặng.
 
-## 🔴 Sync-wave GIỮA các Application — không có thì mỗi buổi rebuild là một cơn bão restart
+## 🔴 Sync-wave giữa các Application là BEST-EFFORT, KHÔNG phải hàng rào — đã đo, đã bác bỏ
 
-ApplicationSet sinh 18 app service **độc lập** với root: root chỉ tạo *ApplicationSet*, còn 18 app con thì controller đẻ ra ngay lập tức, không chờ ai. Không chặn ⇒ 18 JVM boot lúc Postgres/Kafka/Secret chưa tồn tại ⇒ `RESTARTS` tăng đều ở mọi pod ⇒ đúng cái **"vòng lặp restart"** mà [`helm-chart.md`](helm-chart.md) gọi là bài học đắt nhất của Day 2 — và bạn sẽ đi đổ lỗi cho RAM node thay vì cho thứ tự deploy.
+**Đừng dựa vào nó để đảm bảo thứ tự.** Đo thật trên EKS ở Day 6:
 
-Cách chặn: annotation trên **chính các Application con của root** (root sync theo wave và **chờ wave trước Healthy** mới sang wave sau).
+| Nhóm pod | Giờ tạo |
+|---|---|
+| 18 pod service (wave 3) | `02:33:31` – `02:33:34` |
+| 10 pod datastore (wave 1) | `02:36:03` – `02:36:14` |
 
-| Wave | Ai | Vì sao ở đó |
+Service sinh ra **trước datastore 2 phút 30 giây** — wave chạy **ngược**. Hậu quả: 6/9 service mỗi env chết lúc boot với `java.net.UnknownHostException: postgresql.data-staging.svc.cluster.local` (DNS chưa có, **không phải** connection refused) rồi restart 1–3 lần.
+
+**Vì sao nó không giữ:** ArgoCD mở cổng wave khi resource của wave trước **Healthy**. Một `Application` vừa được tạo thì chưa kịp reconcile, **chưa quản lý resource nào** — mà app không có resource nào được chấm là **Healthy**. Cổng mở ngay trong ~3 giây. Không có gì hỏng, không có lỗi, wave chỉ đơn giản là vô hiệu.
+
+→ **Hàng rào thật nằm ở tầng kubelet**: `initContainer` trong `charts/service` chờ mọi datastore mở cổng (`waitForDatastores`, xem [`helm-chart.md`](helm-chart.md)). Pod đứng ở `Init`, không boot, không chết, không đốt CPU.
+
+Vẫn **giữ** sync-wave vì nó miễn phí và có tác dụng phụ tốt (Ingress tạo sớm ⇒ ALB provision song song với lúc JVM boot), nhưng đọc nó như *gợi ý thứ tự*, không phải *bảo đảm*:
+
+| Wave | Ai | Tác dụng thật |
 |---:|---|---|
-| **-1** | `ExternalSecret` (trong chart `platform` và `infra`) | Secret phải có trước pod |
-| **1** | `infra-staging`, `infra-prod` | 5 datastore, PVC bind EBS thật — chậm nhất (~3-5') |
-| **2** | `platform-staging`, `platform-prod` | ConfigMap + Ingress. Đặt trước service để ALB provision **song song** lúc JVM đang boot |
-| **3** | `appset-services` | 18 app service |
+| **-1** | `ExternalSecret` (trong chart `platform` và `infra`) | ✅ **có hiệu lực** — cùng một Application nên đây là wave thật |
+| **1** | `infra-staging`, `infra-prod` | ⚠️ gợi ý |
+| **2** | `platform-staging`, `platform-prod` | ⚠️ gợi ý |
+| **3** | `appset-services` | ⚠️ gợi ý |
 
-⚠️ Cơ chế này dựa vào việc ArgoCD đánh giá **health của Application con**. Sau lần dựng đầu tiên, xác nhận bằng mắt: trong lúc wave 1 chạy thì `kubectl get applications -n argocd` **chưa** được có app service nào. Nếu 18 app xuất hiện ngay lập tức thì wave không ăn — quay lại đọc log `argocd-application-controller`.
+📌 Bài học tổng quát: **sync-wave chỉ là hàng rào thật khi các resource nằm trong CÙNG một Application.** Qua ranh giới Application thì nó chỉ còn là thứ tự tạo object.
+
+## 🔴 Bấm nút bằng `kubectl apply --server-side`
+
+```bash
+kubectl apply --server-side -f apps/root.yaml
+```
+
+Client-side apply nhét annotation `kubectl.kubernetes.io/last-applied-configuration` vào object. Annotation đó không có trong Git, mà **root tự quản lý chính nó** ⇒ ArgoCD so desired (Git) với live (có annotation) thấy khác ⇒ `badmintonhub-root` đứng **OutOfSync vĩnh viễn** trong khi cả 22 app con đều Synced/Healthy.
+
+Không hỏng gì về vận hành, nhưng làm hỏng thứ đắt hơn: **tín hiệu**. Từ đó trở đi "có app OutOfSync" không còn nghĩa là "có gì đó sai".
+
+Đã lỡ apply client-side rồi thì gỡ tay một lần: `kubectl -n argocd annotate app badmintonhub-root kubectl.kubernetes.io/last-applied-configuration-`
 
 ## ⚠️ Xoá child app là vô nghĩa
 

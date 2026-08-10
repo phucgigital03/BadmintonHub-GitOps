@@ -163,6 +163,36 @@ Health indicator của Redis **block tới khi hết timeout của chính nó**,
 
 Hệ quả thực dụng: dùng composite cho readiness là **chấp nhận được** (không restart pod) nhưng **đừng đặt `periodSeconds` quá ngắn** và đừng để limit RAM sát mép. Nếu sau này permit được `/actuator/health/**` ở repo app thì nhóm `readiness` chuẩn của Spring Boot không có vấn đề này vì nó lọc sẵn component không thiết yếu.
 
+## 🔴 Hàng rào khởi động — `initContainer` chờ datastore (Day 6)
+
+**Đây là thứ chặn "vòng lặp restart" ở tầng đúng.** Đo thật trên EKS: ArgoCD tạo 18 pod service lúc `02:33:31` còn 10 pod datastore mãi `02:36:03` — sớm hơn **2 phút rưỡi**. Spring chết ngay lúc boot:
+
+```
+Caused by: java.net.UnknownHostException: postgresql.data-staging.svc.cluster.local
+```
+
+Chú ý: **`UnknownHostException`, không phải `Connection refused`** — Service còn chưa tồn tại nên DNS trả NXDOMAIN. Hai thông báo này chỉ tới hai thế giới khác nhau:
+
+| Message | Nghĩa | Đi tìm ở đâu |
+|---|---|---|
+| `UnknownHostException` | Service **chưa tồn tại** | thứ tự deploy |
+| `Connection refused` | Service có, pod **chưa nghe cổng** | pod datastore đang boot |
+| `ConnectTimeoutException` | có thứ gì đó **nuốt gói tin** | NetworkPolicy ([`bitnami-datastores.md`](bitnami-datastores.md)) |
+
+`sync-wave` của ArgoCD **không** chặn được (xem [`argocd-appset.md`](argocd-appset.md) — app vừa tạo chưa có resource nên được chấm Healthy ngay). Nên hàng rào nằm ở kubelet:
+
+```yaml
+# charts/service/values.yaml
+waitForDatastores: true                                     # default an toàn
+waitImage: public.ecr.aws/docker/library/busybox:1.36        # ECR Public, né rate-limit Docker Hub
+waitTimeoutSeconds: 300
+```
+
+initContainer đọc `DATASTORE_WAIT` từ ConfigMap `app-config` (chuỗi `host:port` do `charts/platform` ghép sẵn theo `dataNamespace`) rồi `nc -z` từng cái. **Đổi env chỉ là đổi 1 dòng values, không phải sửa 18 file.**
+
+- **`false` cho `eureka-server` và `frontend`.** Eureka không chạm datastore nào mà 7 service Java lại đăng ký vào nó lúc boot ⇒ bắt nó xếp hàng sau Postgres/Kafka là tự kéo dài đường găng. Frontend là nginx tĩnh, không có `envFrom.configMap` nên cũng không đọc được biến đó.
+- 🔴 **Timeout là bắt buộc, không phải phòng xa.** Hết ngân sách thì initContainer `exit 0` và để app tự thử (lùi về đúng hành vi cũ). Không có timeout thì một cổng bị NetworkPolicy chặn — **đã xảy ra thật với RabbitMQ 61613 ở Day 2** — làm pod kẹt `Init:0/1` **vĩnh viễn**. Đó là hỏng nặng hơn crashloop: crashloop ít ra còn tự khỏi và còn log của app để đọc.
+
 ## Graceful shutdown (Day 7)
 
 `preStop` sleep + `terminationGracePeriodSeconds` là **bắt buộc**, không phải nice-to-have: Eureka `lease-expiration-duration-in-seconds: 30` nghĩa là bản ghi cũ còn sống 30s sau khi pod chết → gateway route vào pod đã chết = **5xx trước mặt khán giả**.

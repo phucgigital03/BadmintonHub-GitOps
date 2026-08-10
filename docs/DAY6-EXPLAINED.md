@@ -25,7 +25,7 @@
 Sau Day 6, lệnh **duy nhất** phải gõ tay để dựng lại toàn bộ ứng dụng là:
 
 ```bash
-kubectl apply -f apps/root.yaml
+kubectl apply --server-side -f apps/root.yaml
 ```
 
 ---
@@ -64,20 +64,52 @@ Matrix generator nhân 2 danh sách với nhau: 9 service × 2 env = 18 Applicat
 
 Kèm `goTemplateOptions: [missingkey=error]`: gõ nhầm `{{.service}}` thì ApplicationSet **báo lỗi** thay vì đẻ ra một app tên `-staging`.
 
-### 1.3 Sync-wave: thứ tự, và vì sao thiếu nó là cả một cơn bão
+### 1.3 Sync-wave: thứ tự — nhưng KHÔNG phải hàng rào
 
-ArgoCD mặc định apply mọi thứ **song song**. Với hệ này thì sai: 18 JVM boot lúc Postgres/Kafka/Secret chưa tồn tại ⇒ crash ⇒ restart ⇒ **mỗi vòng restart lại boot thêm một JVM** ⇒ CPU node bốc lên và bạn sẽ đi đổ lỗi cho RAM. Đây đúng là bài học đắt nhất của Day 2 (`.claude/rules/helm-chart.md` §"Cụm chậm" gần như luôn là VÒNG LẶP RESTART).
+Annotation `argocd.argoproj.io/sync-wave` xếp thứ tự resource; ArgoCD chờ wave trước `Healthy` rồi mới sang wave sau.
 
-Annotation `argocd.argoproj.io/sync-wave` xếp thứ tự; ArgoCD **chờ wave trước Healthy** rồi mới sang wave sau.
-
-| Wave | Ai | Vì sao |
+| Wave | Ai | Có hiệu lực thật? |
 |---:|---|---|
-| **-1** | `ExternalSecret` | Secret phải có trước pod |
-| **1** | `infra-staging`, `infra-prod` | 5 datastore, PVC bind EBS thật — chậm nhất (~3-5') |
-| **2** | `platform-staging`, `platform-prod` | ConfigMap + Ingress. Đặt trước service để ALB provision **song song** với lúc JVM boot |
-| **3** | `appset-services` | 18 app service |
+| **-1** | `ExternalSecret` (trong chart `platform`/`infra`) | ✅ **có** — cùng một Application |
+| **1** | `infra-staging`, `infra-prod` | ⚠️ chỉ là gợi ý |
+| **2** | `platform-staging`, `platform-prod` | ⚠️ chỉ là gợi ý |
+| **3** | `appset-services` | ⚠️ chỉ là gợi ý |
 
-⚠️ Có một cái bẫy về **phạm vi**: ApplicationSet sinh 18 app con **độc lập** với root. Wave chỉ chặn được thời điểm *ApplicationSet được tạo ra*; sau đó 18 app con tự chạy. Vì vậy wave 3 phải nằm trên **ApplicationSet**, không phải trên từng app con.
+🔴 **Đo thật ở Day 6 và nó KHÔNG giữ.** 18 pod service sinh lúc `02:33:31`, 10 pod datastore mãi `02:36:03` — service ra đời **trước** datastore 2 phút rưỡi, tức wave chạy **ngược**.
+
+Lý do: ArgoCD mở cổng wave khi resource của wave trước `Healthy`. Một `Application` vừa được tạo chưa kịp reconcile nên **chưa quản lý resource nào** — mà app không có resource nào thì được chấm **Healthy**. Cả 3 wave qua hết trong ~3 giây.
+
+📌 **Sync-wave chỉ là hàng rào thật khi các resource nằm trong CÙNG một Application.** Qua ranh giới Application thì nó chỉ còn là thứ tự tạo object.
+
+Vẫn giữ nó vì miễn phí và có tác dụng phụ tốt (Ingress tạo sớm ⇒ ALB provision song song với lúc JVM boot). Nhưng hàng rào thật là thứ ở mục kế tiếp.
+
+### 1.3b initContainer — hàng rào ở tầng kubelet
+
+Hậu quả của việc wave không giữ: 6/9 service mỗi env chết lúc boot rồi restart 1–3 lần.
+
+```
+Caused by: java.net.UnknownHostException: postgresql.data-staging.svc.cluster.local
+```
+
+**`UnknownHostException` chứ không phải `Connection refused`** — Service còn chưa tồn tại nên DNS trả NXDOMAIN. Ba thông báo, ba thế giới khác nhau:
+
+| Message | Nghĩa |
+|---|---|
+| `UnknownHostException` | Service **chưa tồn tại** → lỗi thứ tự deploy |
+| `Connection refused` | Service có, pod datastore **chưa nghe cổng** |
+| `ConnectTimeoutException` | có thứ gì đó **nuốt gói tin** → NetworkPolicy |
+
+Cách sửa không phụ thuộc ArgoCD: `charts/service` có `initContainer` chờ mọi datastore mở cổng rồi mới cho JVM chạy. Pod đứng ở `Init`, **không boot, không chết, không restart, không đốt CPU**.
+
+```yaml
+waitForDatastores: true                                # default; false cho eureka-server + frontend
+waitImage: public.ecr.aws/docker/library/busybox:1.36
+waitTimeoutSeconds: 300
+```
+
+Danh sách `host:port` lấy từ biến `DATASTORE_WAIT` trong ConfigMap `app-config`, do `charts/platform` ghép sẵn từ `dataNamespace` → đổi env chỉ sửa 1 dòng values, không phải 18 file.
+
+⚠️ **Timeout là bắt buộc.** Hết giờ thì initContainer `exit 0` và để app tự thử. Không có timeout thì một cổng bị NetworkPolicy chặn (đã xảy ra thật với RabbitMQ 61613 ở Day 2) làm pod kẹt `Init:0/1` **vĩnh viễn** — hỏng nặng hơn crashloop.
 
 ### 1.4 ESO thay script: cùng một Secret, khác cách sinh ra
 
@@ -198,7 +230,7 @@ kubectl -n argocd get pods            # tất cả Running
 
 
 # ─── B2. BẤM NÚT — lệnh apply tay duy nhất của cả mô hình ─────────────────────────
-kubectl apply -f apps/root.yaml
+kubectl apply --server-side -f apps/root.yaml
 
 
 # ─── B3. Xem nó tự dựng ───────────────────────────────────────────────────────────
@@ -325,6 +357,9 @@ Trả lời được không nhìn tài liệu thì bạn đã nắm Day 6:
 | `valueFiles must be within the app path` | dùng Application đơn thay vì multi-source `$values` |
 | Child app `namespace not found` | thiếu `CreateNamespace=true` |
 | `argocd app delete -l env=staging` không xoá gì | thiếu `labels` trong template ApplicationSet |
+| Service restart 1-3 lần lúc dựng, log có `UnknownHostException: postgresql.data-<env>...` | pod service sinh trước datastore — `waitForDatastores` chưa bật, hoặc `DATASTORE_WAIT` không có trong `app-config` |
+| Pod kẹt `Init:0/1` quá 5 phút | initContainer chờ một cổng không bao giờ mở → NetworkPolicy chặn (`bitnami-datastores.md`). Sau `waitTimeoutSeconds` nó tự bỏ qua |
+| **`badmintonhub-root` OutOfSync** trong khi 22 app con đều Synced | bấm nút bằng `kubectl apply` client-side → annotation `last-applied-configuration` không có trong Git. Dùng `--server-side` |
 | Sửa `kubectl edit` xong bị mất | `selfHeal: true` — đúng thiết kế, sửa vào Git |
 | ALB còn sống sau khi xoá app | Application thiếu finalizer `resources-finalizer.argocd.argoproj.io` |
 
@@ -334,4 +369,4 @@ Trả lời được không nhìn tài liệu thì bạn đã nắm Day 6:
 
 - **Day 7 (observability)**: thêm `kube-prometheus-stack` + Loki = thêm 1-2 file vào `apps/` với wave phù hợp. Không phải dựng cơ chế mới.
 - **Day 8 (domain + HTTPS)**: sửa **2 dòng values × 2 env** + `frontendUrl`, mở PR, merge. ArgoCD lo phần còn lại. Rollback = `git revert`.
-- **Tiêu chí vàng đã đóng**: `destroy` → `apply` → `bootstrap.sh` → `kubectl apply -f apps/root.yaml` → e2e xanh, **không** phải nạp lại secret, **không** build lại image FE, **không** sửa ConfigMap theo ALB DNS mới.
+- **Tiêu chí vàng đã đóng**: `destroy` → `apply` → `bootstrap.sh` → `kubectl apply --server-side -f apps/root.yaml` → e2e xanh, **không** phải nạp lại secret, **không** build lại image FE, **không** sửa ConfigMap theo ALB DNS mới.

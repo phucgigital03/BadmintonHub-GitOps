@@ -46,3 +46,7 @@ resources:
     cpu: 10m
   limits:
     memory: 64Mi
+
+# nginx tĩnh, không có envFrom.configMap nên cũng không đọc được DATASTORE_WAIT.
+# Bật ở đây sẽ làm chart `required` báo lỗi lúc render — cố ý để lỗi ồn ào thay vì im lặng.
+waitForDatastores: false

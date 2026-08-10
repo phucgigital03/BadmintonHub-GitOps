@@ -42,3 +42,8 @@ resources:
     cpu: 100m
   limits:
     memory: 640Mi
+
+# Không chạm datastore nào (registry thuần in-memory) → KHÔNG chờ.
+# 🔴 Đây không phải tối ưu vặt: 7 service Java đăng ký vào Eureka lúc boot, nên Eureka phải lên
+# SỚM NHẤT. Bắt nó xếp hàng sau Postgres/Kafka là tự kéo dài đường găng của cả cụm.
+waitForDatastores: false

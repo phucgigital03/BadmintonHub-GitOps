@@ -94,7 +94,12 @@ run helm upgrade --install argocd argo/argo-cd -n "$NS" --create-namespace \
 # 2 app infra (wave 1) → 2 app platform (wave 2) → ApplicationSet 18 app service (wave 3).
 echo
 echo "── Bấm nút app-of-apps"
-run kubectl apply -f apps/root.yaml || exit 1
+# 🔴 --server-side là BẮT BUỘC (đo thật ở Day 6). Client-side apply nhét annotation
+# `kubectl.kubernetes.io/last-applied-configuration` vào object; annotation đó không có trong
+# Git, mà root tự quản lý chính nó ⇒ ArgoCD thấy desired ≠ live ⇒ badmintonhub-root đứng
+# OutOfSync VĨNH VIỄN dù 22 app con đều xanh. Server-side apply ghi vào metadata.managedFields
+# thay vì annotation nên không lệch.
+run kubectl apply --server-side -f apps/root.yaml || exit 1
 
 echo
 [ "$DRY_RUN" = "1" ] && { echo "DRY_RUN xong."; exit 0; }
