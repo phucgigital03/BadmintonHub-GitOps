@@ -35,11 +35,20 @@ spec:
   source:
     repoURL: https://github.com/phucgigital03/BadmintonHub-GitOps
     targetRevision: main
+    # Chỉ đọc *.yaml ở tầng ngay trong apps/. KHÔNG recurse — thư mục con (nếu sau này có)
+    # phải được khai tường minh bằng một Application riêng.
     path: apps
-    directory:
-      # Chỉ đọc *.yaml ở tầng ngay trong apps/. Không recurse — thư mục con (nếu sau này có)
-      # phải được khai tường minh bằng một Application riêng.
-      recurse: false
+    #
+    # 🔴 KHÔNG khai `directory: { recurse: false }` — đo thật ở Day 6.
+    # `false` đúng bằng giá trị mặc định, mà API server áp omitempty cho boolean false nên field
+    # bị LOẠI BỎ khỏi object đã lưu. ArgoCD so Git (có field) với live (không có field) ⇒
+    # badmintonhub-root đứng **OutOfSync VĨNH VIỄN** trong khi 22 app con đều Synced/Healthy.
+    # Bấm sync bao nhiêu lần cũng không hết vì lần nào ghi xuống cũng bị lược đi.
+    # Không hỏng vận hành, nhưng giết mất TÍN HIỆU: từ đó "có app OutOfSync" không còn nghĩa
+    # là "có gì đó sai".
+    #
+    # Quy tắc rút ra: đừng khai tường minh field bằng ĐÚNG giá trị mặc định (false / 0 / "")
+    # trong manifest mà chính ArgoCD quản lý. Muốn ghi lại chủ ý thì viết comment như trên.
 
   destination:
     server: https://kubernetes.default.svc

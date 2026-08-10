@@ -359,7 +359,8 @@ Trả lời được không nhìn tài liệu thì bạn đã nắm Day 6:
 | `argocd app delete -l env=staging` không xoá gì | thiếu `labels` trong template ApplicationSet |
 | Service restart 1-3 lần lúc dựng, log có `UnknownHostException: postgresql.data-<env>...` | pod service sinh trước datastore — `waitForDatastores` chưa bật, hoặc `DATASTORE_WAIT` không có trong `app-config` |
 | Pod kẹt `Init:0/1` quá 5 phút | initContainer chờ một cổng không bao giờ mở → NetworkPolicy chặn (`bitnami-datastores.md`). Sau `waitTimeoutSeconds` nó tự bỏ qua |
-| **`badmintonhub-root` OutOfSync** trong khi 22 app con đều Synced | bấm nút bằng `kubectl apply` client-side → annotation `last-applied-configuration` không có trong Git. Dùng `--server-side` |
+| **`badmintonhub-root` OutOfSync** trong khi 22 app con đều Synced | manifest khai một field bằng **đúng giá trị mặc định** (`recurse: false`) → API server lược đi → Git có, live không có → lệch vĩnh viễn. **Không** phải do annotation `last-applied-configuration` (ArgoCD normalize nó) |
+| `initContainer` log `DATASTORE_WAIT chưa có trong ConfigMap` | pod sinh trước khi `platform` sync xong ConfigMap. `envFrom` chỉ đọc 1 lần lúc container start → initContainer `exit 1`, kubelet thử lại và tự khỏi |
 | Sửa `kubectl edit` xong bị mất | `selfHeal: true` — đúng thiết kế, sửa vào Git |
 | ALB còn sống sau khi xoá app | Application thiếu finalizer `resources-finalizer.argocd.argoproj.io` |
 

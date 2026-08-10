@@ -74,17 +74,37 @@ Vẫn **giữ** sync-wave vì nó miễn phí và có tác dụng phụ tốt (I
 
 📌 Bài học tổng quát: **sync-wave chỉ là hàng rào thật khi các resource nằm trong CÙNG một Application.** Qua ranh giới Application thì nó chỉ còn là thứ tự tạo object.
 
-## 🔴 Bấm nút bằng `kubectl apply --server-side`
+## 🔴 ĐỪNG khai field bằng ĐÚNG giá trị mặc định — `OutOfSync` vĩnh viễn
+
+Đo thật ở Day 6. `apps/root.yaml` viết:
+
+```yaml
+source:
+  directory:
+    recurse: false        # ⬅ đúng bằng default
+```
+
+`false` là giá trị mặc định, mà API server áp `omitempty` cho boolean `false` nên field **bị loại bỏ** khỏi object đã lưu. ArgoCD so Git (**có** field) với live (**không có** field) ⇒ `badmintonhub-root` đứng **OutOfSync vĩnh viễn** trong khi cả 22 app con đều Synced/Healthy. Bấm sync bao nhiêu lần cũng vô ích: lần nào ghi xuống cũng bị lược đi.
+
+Không hỏng gì về vận hành, nhưng làm hỏng thứ đắt hơn: **tín hiệu**. Từ đó "có app OutOfSync" không còn nghĩa là "có gì đó sai".
+
+→ **Quy tắc: đừng khai tường minh field bằng đúng default (`false` / `0` / `""`) trong manifest mà chính ArgoCD quản lý.** Muốn ghi lại chủ ý thì dùng comment.
+
+⚠️ Đây là loại lỗi khó truy vì nó **chỉ xuất hiện ở object ArgoCD tự quản lý**. Cách khoanh vùng nhanh — so trực tiếp:
+```bash
+kubectl -n argocd get app <name> -o jsonpath='{.spec}' | python3 -m json.tool
+```
+rồi đối chiếu từng field với file trong Git. Field nào **có trong Git mà vắng ở live** chính là thủ phạm.
+
+*(Nghi can thường bị đổ oan: `kubectl.kubernetes.io/last-applied-configuration`. Đã kiểm — ArgoCD **có** normalize annotation đó, gỡ nó đi không làm `OutOfSync` biến mất. Đừng mất thời gian ở đó.)*
+
+## Bấm nút bằng `kubectl apply --server-side`
 
 ```bash
 kubectl apply --server-side -f apps/root.yaml
 ```
 
-Client-side apply nhét annotation `kubectl.kubernetes.io/last-applied-configuration` vào object. Annotation đó không có trong Git, mà **root tự quản lý chính nó** ⇒ ArgoCD so desired (Git) với live (có annotation) thấy khác ⇒ `badmintonhub-root` đứng **OutOfSync vĩnh viễn** trong khi cả 22 app con đều Synced/Healthy.
-
-Không hỏng gì về vận hành, nhưng làm hỏng thứ đắt hơn: **tín hiệu**. Từ đó trở đi "có app OutOfSync" không còn nghĩa là "có gì đó sai".
-
-Đã lỡ apply client-side rồi thì gỡ tay một lần: `kubectl -n argocd annotate app badmintonhub-root kubectl.kubernetes.io/last-applied-configuration-`
+Không bắt buộc để hết `OutOfSync` (xem mục trên), nhưng đúng hơn cho object mà **root tự quản lý chính nó**: server-side apply ghi quyền sở hữu field vào `metadata.managedFields` thay vì nhồi thêm annotation, nên `kubectl` và `argocd-application-controller` không giành field của nhau.
 
 ## ⚠️ Xoá child app là vô nghĩa
 

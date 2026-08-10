@@ -54,8 +54,16 @@ spec:
           command: ["sh", "-c"]
           args:
             - |
+              # 🔴 exit 1 chứ KHÔNG phải exit 0 — đo thật ở Day 6.
+              # `envFrom` được kubelet phân giải MỘT LẦN lúc container khởi động. `platform` và
+              # service là hai ArgoCD Application riêng, sync song song, nên hoàn toàn có thể pod
+              # sinh ra TRƯỚC khi ConfigMap có DATASTORE_WAIT — đã xảy ra: initContainer thấy biến
+              # rỗng và bỏ qua hàng rào TRONG IM LẶNG, đúng kiểu lỗi mà cả cơ chế này sinh ra để tránh.
+              # exit 1 → kubelet restart initContainer → phân giải lại env → lần sau có biến là chạy tiếp.
+              # Tự khỏi, và trong lúc chờ thì `Init:0/1` + RESTARTS của initContainer là dấu hiệu NHÌN THẤY được.
               if [ -z "$DATASTORE_WAIT" ]; then
-                echo "DATASTORE_WAIT rỗng — bỏ qua hàng rào"; exit 0
+                echo "DATASTORE_WAIT chưa có trong ConfigMap $(hostname) — thử lại (ConfigMap app-config chưa sync?)"
+                exit 1
               fi
               deadline=$(( $(date +%s) + {{ .Values.waitTimeoutSeconds }} ))
               for hp in $DATASTORE_WAIT; do
