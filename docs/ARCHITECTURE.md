@@ -37,6 +37,7 @@ flowchart TD
         DDB["DynamoDB · state lock"]:::aws
         ECR["ECR · 9 repository · tag = git SHA"]:::aws
         SSM["SSM Parameter Store · SecureString<br/>/badminton/staging/* · /badminton/prod/*"]:::aws
+        CWL["CloudWatch Logs · Day 7 · 2 log group<br/>/aws/eks/badminton/cluster · control plane<br/>/badminton/app · stdout cua 18 pod<br/>retention 7 ngay · KHONG de Never expire"]:::aws
         R53["Route53 hosted zone · Day 8"]:::day8
         ACM["ACM wildcard cert<br/>*.badminton.&lt;domain&gt; · Day 8"]:::day8
     end
@@ -62,6 +63,7 @@ flowchart TD
                 direction TB
                 LBC["kube-system · AWS Load Balancer Controller<br/>doc Ingress → tao ALB that"]:::k8s
                 CSI["kube-system · EBS CSI driver + StorageClass gp3"]:::k8s
+                FB["kube-system · Fluent Bit DaemonSet · Day 7<br/>1 pod moi node · tail /var/log/containers/*.log<br/>SA gan IRSA"]:::k8s
                 EDNS["kube-system · ExternalDNS · TTL 60 · Day 8"]:::day8
                 ESO["ns external-secrets · External Secrets Operator"]:::k8s
                 ARGO["ns argocd · ArgoCD<br/>root app badmintonhub-root + AppSet badmintonhub"]:::k8s
@@ -78,6 +80,7 @@ flowchart TD
     end
 
     GOPS["GitHub · badmintonHub-gitops<br/>desired state"]:::k8s
+    DEV(("Ban · SAU buoi demo<br/>doc log khi cum da bien mat")):::user
 
     User -->|"http · ALB DNS tho · Day 4-7"| ALB
     User -.->|"https · staging.badminton.&lt;domain&gt; · Day 8"| R53
@@ -89,6 +92,11 @@ flowchart TD
     EBS <-->|"attach volume"| NODES
     GOPS -->|"ArgoCD watch · sync · self-heal"| ARGO
     ARGO --> NODES
+
+    NODES -->|"stdout/stderr → kubelet ghi /var/log/containers/*.log"| FB
+    FB -->|"IRSA · logs:PutLogEvents · gan nhan pod/ns/label"| CWL
+    CP -.->|"log control plane · cluster_enabled_log_types"| CWL
+    CWL -->|"Logs Insights · DOC DUOC KE CA KHI CUM DA DESTROY"| DEV
 ```
 
 ### Thành phần — vai trò — vòng đời — chi phí
@@ -99,6 +107,7 @@ flowchart TD
 | **DynamoDB table** | State lock, chống 2 người `apply` cùng lúc | ✅ Giữ | ~$0 (on-demand, không request) |
 | **ECR × 9 repo** | Kho image, tag = git SHA | ✅ Giữ | **≈ $0.30/tháng** — lý do rebuild không phải build lại image |
 | **SSM Parameter Store** | Giá trị secret thật, **sống ngoài cụm** | ✅ Giữ | **$0** (Standard tier) |
+| **CloudWatch Logs** *(Day 7)* | Log pod + control plane, **đọc được sau teardown** | ✅ Giữ *(chủ đích)* | ⚠️ **Tính tiền theo GB** — bắt buộc đặt `retention_in_days`, xem §1a |
 | **Route53 hosted zone** *(Day 8)* | DNS zone `badminton.<domain>` | ✅ Giữ | **$0.50/tháng** |
 | **ACM wildcard cert** *(Day 8)* | Cert `*.badminton.<domain>` cho ALB | ✅ Giữ | **$0** (ACM public cert miễn phí) |
 | **VPC + subnet** | Mạng cho cụm, không NAT GW | ❌ Xoá | $0 |
@@ -110,6 +119,56 @@ flowchart TD
 > 🎯 **Tại sao chia 2 stack**: mọi thứ cần để dựng lại cụm (state · image · secret · DNS · cert) nằm ở stack **không bao giờ destroy**. Nhờ vậy rebuild = `terraform apply` + `bootstrap.sh` và **0 thao tác tay** — không nạp lại secret, không build lại image, không xin lại cert.
 
 > ⚠️ **Không dùng cert-manager / Let's Encrypt.** ALB terminate TLS ở tầng AWS và **chỉ nhận cert từ ACM/IAM** — nó không đọc được K8s Secret nơi cert-manager cất cert. Gắn vào là **im lặng không có HTTPS**, không có lỗi nào để lần ra.
+
+### 1a. Log đi từ container lên CloudWatch bằng đường nào
+
+Sáu chặng. Không có chặng nào là tự động — thiếu một chặng là log biến mất **trong im lặng**, không có lỗi nào báo.
+
+| # | Ở đâu | Chuyện gì xảy ra |
+|---|---|---|
+| 1 | Trong container | App ghi ra **stdout/stderr**. Spring Boot mặc định làm đúng thế — **không** ghi ra file. Ứng dụng nào ghi log vào file trong container thì tới đây là mất. |
+| 2 | Trên node | **kubelet** hứng stdout/stderr rồi ghi thành `/var/log/containers/<pod>_<ns>_<container>-<id>.log` (có rotate). Đây cũng chính là thứ `kubectl logs` đọc. |
+| 3 | DaemonSet | **Fluent Bit** (1 pod mỗi node) mount `hostPath: /var/log` và `tail` các file đó. DaemonSet chứ không phải Deployment — log nằm rải trên **từng** node. |
+| 4 | Fluent Bit filter | Filter `kubernetes` hỏi kube-apiserver để gắn metadata: `pod_name`, `namespace_name`, `labels`. **Đây là chặng làm cho log dùng được** — nhờ nó mới lọc được `namespace_name = staging` vs `prod`, vì hai env dùng chung một cụm. |
+| 5 | Fluent Bit output | Output `cloudwatch_logs` dùng **IRSA** đẩy lên log group, mỗi pod một log stream. |
+| 6 | AWS | Đọc bằng **CloudWatch Logs Insights** — kể cả khi cụm đã `terraform destroy`. |
+
+**Hai log group, hai nguồn khác hẳn nhau** — đừng lẫn:
+
+| Log group | Nguồn | Dùng để trả lời |
+|---|---|---|
+| `/badminton/app` | stdout của 18 pod, qua Fluent Bit | "vì sao `booking-service` chết lúc boot" |
+| `/aws/eks/badminton/cluster` | EKS control plane, bật bằng `cluster_enabled_log_types` ở Terraform — **không cần agent** | "vì sao ArgoCD bị 403", "ai gọi apiserver" |
+
+> ⚠️ Trong 5 loại control-plane log, **`audit` là loại ồn nhất** và cũng đắt nhất. Với cụm demo thì `api` + `authenticator` là đủ; bật cả 5 rồi quên là cách nhanh nhất để log tốn hơn cả node.
+
+#### 🔴 Fluent Bit phải nằm ở `bootstrap.sh`, KHÔNG phải một ArgoCD app
+
+Nếu để ArgoCD quản, nó lên **cùng lúc hoặc sau** 18 app service — tức là mất đúng đoạn log bạn cần nhất: **log crash lúc boot**. Đây chính là loại lỗi mà Day 6 đã gặp (`UnknownHostException` vì service khởi động trước datastore 2'30"). Cùng một lý lẽ với ESO ở §5a: thứ mà app **phụ thuộc lúc khởi động** thì phải xong trước khi ArgoCD sync.
+
+IAM cho SA của Fluent Bit: `logs:CreateLogStream` · `logs:PutLogEvents` · `logs:DescribeLogStreams`. **Không** cấp `logs:CreateLogGroup` — để Terraform tạo sẵn log group, vì chỉ có cách đó mới ép được `retention_in_days` (xem ngay dưới).
+
+#### 🔴 CloudWatch Logs là component ĐẦU TIÊN không chia gọn theo "bootstrap giữ / ephemeral xoá"
+
+Mọi thứ khác trong §1 đều rơi rõ về một phía. Log thì không: bạn **muốn** nó sống sót `destroy` — đọc post-mortem sau teardown là toàn bộ lý do nó tồn tại — nhưng "sống sót" cũng có nghĩa là **tích luỹ mỗi buổi demo**.
+
+Mặc định của CloudWatch là **Never expire**. Để nguyên thì mỗi lần rebuild lại đắp thêm một lớp log nằm đó vĩnh viễn, và nó **không hiện ra ở bất kỳ bước verify nào** của runbook teardown hiện tại.
+
+→ Log group **thuộc bootstrap stack**, Terraform quản, `retention_in_days = 7`.
+
+> ⚠️ Đây đúng là mục mà bộ verify bill **đã bắt hụt ở Day 4**: lúc đó chỉ kiểm EBS + ELB nên CloudWatch log group không lọt vào tầm nhìn. Thêm vào lệnh quét ở §5b:
+>
+> ```bash
+> aws logs describe-log-groups \
+>   --query 'logGroups[].[logGroupName,retentionInDays,storedBytes]' --output table
+> # retentionInDays = None  ⇒ Never expire ⇒ đang rò rỉ
+> ```
+
+#### Chi phí — chưa đo, đừng chép con số này như sự thật
+
+CloudWatch Logs tính **theo GB nạp vào** (≈ $0.50–0.70/GB tuỳ region) + lưu trữ (≈ $0.03/GB-tháng). Ước lượng thô: 18 pod Spring Boot ở mức `INFO`, một buổi 2 giờ ≈ vài trăm MB ⇒ **dưới ~$0.50/buổi**. Đây là **ước lượng chưa kiểm chứng** — Day 7 nên đo thật rồi ghi lại, đúng cách đã làm với $0.57 (Day 4) và $0.50 (Day 6).
+
+> 📌 **Còn Loki thì sao?** `Planning_CICD.md` §Day 7 đang khai `Loki` in-cluster. Loki chạy **trong** cụm nên chết cùng cụm; lúc cụm còn sống thì `kubectl logs` đã làm được việc của nó. Với posture ephemeral, CloudWatch bao trùm giá trị của Loki và còn tiết kiệm RAM node. **Chốt chính thức ở Day 7** — sơ đồ này vẽ theo hướng CloudWatch.
 
 ---
 
