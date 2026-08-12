@@ -45,10 +45,16 @@ có gì chưa push thì cụm không bao giờ thấy.
 for ENV in staging prod; do
   echo "$ENV: $(aws ssm get-parameters-by-path --path /badminton/$ENV/ --query 'length(Parameters)' --output text) param"
 done
+echo "observability: $(aws ssm get-parameters-by-path --path /badminton/observability/ --query 'length(Parameters)' --output text) param"
 ```
 
-Phải ra **10 và 10**. Param sống ngoài cụm nên `terraform destroy` không xoá — bình thường không phải
+Phải ra **10 · 10 · 1**. Param sống ngoài cụm nên `terraform destroy` không xoá — bình thường không phải
 làm gì. Ra 0 thì xem [`MANUAL-SETUP.md`](MANUAL-SETUP.md) §3.
+
+> Param thứ 3 là `TELEGRAM_BOT_TOKEN` (Day 7). Thiếu nó thì Alertmanager kẹt
+> `CreateContainerConfigError` — cụm vẫn chạy, chỉ là **không có alert nào tới được điện thoại**.
+> `TELEGRAM_CHAT_ID` **cố ý không** ở SSM: Alertmanager không có `chat_id_file` nên nó nằm literal
+> trong `observability/values.yaml`, và một chat_id không kèm token thì vô hại.
 
 ---
 
@@ -134,7 +140,7 @@ kubectl get applications -n argocd -w
 ```
 
 Mong đợi: `badmintonhub-root` → `infra-{staging,prod}` → `platform-{staging,prod}` → 18 app
-`<svc>-<env>`. Tổng **23**.
+`<svc>-<env>` → `observability`. Tổng **24**.
 
 ### 🔴 Điều gần như chắc chắn sẽ thấy — ĐỪNG hoảng
 
@@ -160,7 +166,7 @@ Thấy `chờ postgresql.data-staging.svc.cluster.local:5432  ok` (đủ 5 dòng
 kubectl get applications -n argocd -o custom-columns=N:.metadata.name,S:.status.sync.status,H:.status.health.status --no-headers | grep -v "Synced *Healthy"
 ```
 
-**Không in gì** = 23/23 xanh.
+**Không in gì** = 24/24 xanh.
 
 ```bash
 kubectl get externalsecret -A
@@ -169,7 +175,9 @@ kubectl get pods -n prod
 kubectl get pvc -A
 ```
 
-4 ExternalSecret `SecretSynced` · 9 pod `Running` mỗi env · 8 PVC `Bound` trên `gp3`.
+5 ExternalSecret `SecretSynced` (4 cũ + `alertmanager-telegram` ở ns `observability`) · 9 pod
+`Running` mỗi env · **8 PVC** `Bound` trên `gp3` — observability cố ý dùng `emptyDir` nên **không
+thêm PVC nào**, teardown ở Bước 7 không đổi một dòng.
 
 > 👉 **Nhìn cột `RESTARTS` của container chính.** `0` ⇒ initContainer đã thật sự chặn được cuộc đua
 > service-trước-datastore. `1–3` ⇒ hàng rào chưa đủ, đọc log `wait-datastores` và báo lại.
@@ -190,6 +198,63 @@ văn `/api/actuator/health` trong khi actuator của nó ở `/actuator/health` 
 
 Đọc mã trả về: **502/503** = target group hỏng · **404** = đã tới gateway, sai path ·
 **401/400/405** = đã tới service.
+
+### Nghiệm thu observability (Day 7)
+
+**① Endpoint phải 200, không phải 403.** Kiểm trước tiên — sai ở đây thì mọi bước sau vô nghĩa.
+
+```bash
+kubectl -n staging run tmp --rm -i --restart=Never --image=curlimages/curl -- \
+  curl -s -o /dev/null -w '%{http_code}\n' http://booking-service:3003/actuator/prometheus
+```
+
+`200` = xong. **`403`** = image đang chạy thiếu `"/actuator/prometheus"` trong `permitAll` của
+`SecurityConfig` → `values/<svc>-staging.yaml` còn trỏ tag trước Day 7. **`404`** = thiếu
+`MANAGEMENT_ENDPOINTS_WEB_EXPOSURE_INCLUDE` hoặc image thiếu `micrometer-registry-prometheus`.
+
+**② Target UP.**
+
+```bash
+kubectl -n observability port-forward svc/prometheus-operated 9090 &
+open http://localhost:9090/targets
+```
+
+Kỳ vọng **8 UP** (8 service Java ở `staging`; `frontend` cố ý vắng mặt) và **0 target control-plane
+DOWN** (4 cái đó đã tắt trong `observability/values.yaml`). Sau khi promote prod → **16 UP**.
+
+**③ Tên metric — đối chiếu thật, đừng tin bảng.**
+
+```bash
+kubectl -n staging exec deploy/booking-service -- \
+  sh -c 'curl -s localhost:3003/actuator/prometheus | grep -E "deadletter|stuck"'
+```
+
+Lệch tên ⇒ sửa PromQL trong `observability/templates/prometheusrule.yaml`, push, ArgoCD tự áp.
+
+**④ Bắn một sự kiện DLT thật → Telegram phải kêu.** Đây là thứ đóng điều kiện go-live ③ còn nợ
+từ vòng audit money-safety.
+
+```bash
+KPOD=$(kubectl -n data-staging get pod -l app.kubernetes.io/name=kafka -o name | head -1)
+kubectl -n data-staging exec -i $KPOD -- \
+  kafka-console-producer.sh --bootstrap-server localhost:9092 --topic payment.player.confirmed.DLT <<< '{"test":"day7"}'
+```
+
+`PaymentDeadLetterMonitor` của booking-service nghe đúng topic này → `booking_payment_deadletter_total`
++1 → alert `KafkaDeadLetter` (`for: 0m`) → tin nhắn Telegram trong ~30–60s.
+
+**⑤ Graceful shutdown — đo bằng số, không bằng cảm giác.**
+
+```bash
+# tab 1 — bắn liên tục
+while true; do curl -s -o /dev/null -w '%{http_code}\n' -X POST "http://$ALB/api/auth/login" \
+  -H 'Content-Type: application/json' -d '{"email":"x@y.z","password":"w"}'; sleep 0.3; done
+# tab 2
+kubectl -n staging rollout restart deploy/api-gateway
+```
+
+Chuỗi phải **toàn `401`, không một `502`/`503` nào**. Có 5xx ⇒ biến chưa tới pod:
+`kubectl -n staging exec deploy/api-gateway -- env | grep SERVER_SHUTDOWN`.
 
 ---
 
@@ -296,6 +361,13 @@ aws ec2 describe-network-interfaces --region $R --query 'NetworkInterfaces[].Net
 | Sửa `kubectl edit` xong bị mất | `selfHeal: true` — đúng thiết kế, sửa vào Git |
 | `kubectl delete pvc` treo | pod còn mount — quay lại đợi pod biến mất |
 | Nút copy số tài khoản không copy | Web API secure-context-only trên `http` — Day 8 (HTTPS) sửa miễn phí |
+| App `observability` fail `metadata.annotations: Too long` | thiếu `ServerSideApply=true` — CRD của kube-prometheus-stack vượt giới hạn 262144 byte của annotation `last-applied-configuration` |
+| `ServiceMonitor` tồn tại mà `/targets` **rỗng** | thiếu `serviceMonitorSelectorNilUsesHelmValues: false` → Prometheus chỉ nhận CR có label `release` của chính nó, và **bỏ qua trong im lặng** |
+| Target service **DOWN**, curl endpoint trả **403** | image đang chạy thiếu `"/actuator/prometheus"` trong `permitAll` — `values/<svc>-*.yaml` còn ở tag trước Day 7 |
+| Target service **DOWN**, curl trả **404** | thiếu `MANAGEMENT_ENDPOINTS_WEB_EXPOSURE_INCLUDE` trong `app-config`, hoặc image thiếu `micrometer-registry-prometheus` |
+| Alertmanager `CreateContainerConfigError` | `ExternalSecret alertmanager-telegram` chưa sync → kiểm param `/badminton/observability/TELEGRAM_BOT_TOKEN` |
+| Alertmanager `Running` mà **không tin nhắn nào tới** | `chat_id` còn là placeholder / sai số trong `observability/values.yaml`; kiểm `kubectl -n observability logs sts/alertmanager-... -c alertmanager \| grep -i telegram` |
+| Telegram im nhưng Prometheus `/alerts` có FIRING | route/receiver: config merge đã bỏ mất receiver — xem cảnh báo về `receivers` list ở `observability/values.yaml` |
 
 ---
 

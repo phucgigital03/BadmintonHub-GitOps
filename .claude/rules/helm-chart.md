@@ -199,6 +199,29 @@ initContainer đọc `DATASTORE_WAIT` từ ConfigMap `app-config` (chuỗi `host
 
 > ⚠️ **KHÔNG tạo `PodDisruptionBudget`** ở posture 1-replica: `minAvailable: 1` trên Deployment 1 replica **chặn vĩnh viễn mọi drain/eviction tự nguyện** (không thể có 1 pod available trong khi evict pod duy nhất). Với spot thì PDB cũng không bảo vệ được gì (interruption là *involuntary*). PDB chỉ có nghĩa khi scale ≥ 2.
 
+Cơ chế có **hai nửa ở hai chart**, và nửa Kubernetes một mình là chưa đủ:
+
+| Nửa | Ở đâu | Không có thì |
+|---|---|---|
+| `preStop: sleep 15` + `terminationGracePeriodSeconds: 45` | `charts/service/templates/deployment.yaml` | pod bị rút khỏi Endpoints và chết cùng lúc → ALB/Eureka còn trỏ vào đó → **502** |
+| `SERVER_SHUTDOWN=graceful` + `SPRING_LIFECYCLE_TIMEOUT_PER_SHUTDOWN_PHASE=20s` | `charts/platform` ConfigMap | SIGTERM giết JVM **ngay lập tức**, request đang dở bị cắt giữa chừng |
+
+Ngân sách 45s = 15 (chờ Endpoints/Eureka hội tụ) + 20 (drain) + 10 dư. **Đổi số nào cũng phải soát cả hai chỗ**: tổng vượt 45 thì kubelet `SIGKILL` trước khi Spring drain xong, tức mất đúng thứ vừa bật.
+
+## Metrics — công tắc `metrics.enabled` (Day 7)
+
+```yaml
+# charts/service/values.yaml
+metrics:
+  enabled: true      # → label `badminton.io/metrics: enabled` trên Service
+```
+
+ServiceMonitor `badminton-services` (chart `observability/`) chọn Service theo đúng label này, nên đây là công tắc quyết định service có bị Prometheus scrape hay không. Cùng chỗ đã có tiền lệ `waitForDatastores`.
+
+- **`false` cho `frontend`** ở cả 3 env — nginx không có actuator, bật lên là một **target DOWN vĩnh viễn**. Không hỏng vận hành, nhưng hỏng thứ đắt hơn: bảng target lúc nào cũng đỏ thì vài tuần sau không ai nhìn nó nữa.
+- Label nằm ở `metadata.labels`, **không** đụng `spec.selector` — `spec.selector` immutable một phần và đã có tiền lệ hỏng ở Day 6.
+- Chọn bằng **label + ServiceMonitor**, không phải annotation `prometheus.io/scrape` kiểu cũ: Prometheus Operator không đọc annotation đó, nó sẽ bị bỏ qua **trong im lặng**.
+
 ## Verify chart trước khi commit
 
 ```bash

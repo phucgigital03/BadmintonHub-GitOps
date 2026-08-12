@@ -5,7 +5,7 @@ globs: apps/**/*.yaml
 
 # ArgoCD — app-of-apps + ApplicationSet
 
-Cấu trúc thật ở `apps/` (chốt Day 6): **1 root `Application`** trỏ `apps/` → 2 app `infra-<env>` (wave 1) + 2 app `platform-<env>` (wave 2) + **1 ApplicationSet** matrix 9 svc × 2 env = **18 child** (wave 3).
+Cấu trúc thật ở `apps/` (chốt Day 6, +Day 7): **1 root `Application`** trỏ `apps/` → 2 app `infra-<env>` (wave 1) + 2 app `platform-<env>` (wave 2) + **1 ApplicationSet** matrix 9 svc × 2 env = **18 child** (wave 3) + 1 app `observability` (wave 4, **không** tách theo env). Tổng **24** dòng ở `kubectl get applications -n argocd`.
 Dùng ApplicationSet thay vì viết tay 18 manifest. Ghim ArgoCD khi cài — repo này dùng chart **`argo/argo-cd 10.2.3` → ArgoCD `v3.5.0`** (`scripts/argocd-install.sh`).
 
 ## 5 điều BẮT BUỘC trong template
@@ -94,7 +94,7 @@ source:
     recurse: false        # ⬅ đúng bằng default
 ```
 
-`false` là giá trị mặc định, mà API server áp `omitempty` cho boolean `false` nên field **bị loại bỏ** khỏi object đã lưu. ArgoCD so Git (**có** field) với live (**không có** field) ⇒ `badmintonhub-root` đứng **OutOfSync vĩnh viễn** trong khi cả 22 app con đều Synced/Healthy. Bấm sync bao nhiêu lần cũng vô ích: lần nào ghi xuống cũng bị lược đi.
+`false` là giá trị mặc định, mà API server áp `omitempty` cho boolean `false` nên field **bị loại bỏ** khỏi object đã lưu. ArgoCD so Git (**có** field) với live (**không có** field) ⇒ `badmintonhub-root` đứng **OutOfSync vĩnh viễn** trong khi **mọi** app con đều Synced/Healthy. Bấm sync bao nhiêu lần cũng vô ích: lần nào ghi xuống cũng bị lược đi.
 
 Không hỏng gì về vận hành, nhưng làm hỏng thứ đắt hơn: **tín hiệu**. Từ đó "có app OutOfSync" không còn nghĩa là "có gì đó sai".
 

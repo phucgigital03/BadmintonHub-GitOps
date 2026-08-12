@@ -45,10 +45,24 @@ globs: values/*.yaml
 | `EUREKA_URL` | `http://eureka-server.staging.svc.cluster.local:8761/eureka` | ConfigMap |
 | `FRONTEND_URL` | URL công khai của env — sau patch Day 4 chỉ còn **1 chỗ dùng** (link email), xem dưới | ConfigMap |
 | `MANAGEMENT_ENDPOINT_HEALTH_PROBES_ENABLED` | `true` | ConfigMap |
+| `MANAGEMENT_ENDPOINTS_WEB_EXPOSURE_INCLUDE` | `health,info,prometheus` — mở `/actuator/prometheus` cho Prometheus scrape (Day 7) | ConfigMap |
+| `SERVER_SHUTDOWN` | `graceful` — nửa Spring của graceful shutdown (Day 7) | ConfigMap |
+| `SPRING_LIFECYCLE_TIMEOUT_PER_SHUTDOWN_PHASE` | `20s` — trần drain; 15 (preStop) + 20 + 10 dư = `terminationGracePeriodSeconds: 45` ở `charts/service` | ConfigMap |
 | `SPRING_PROFILES_ACTIVE` | `prod` | ConfigMap |
 | `JWT_SECRET` · `CLOUDINARY_*` · `GOOGLE_CLIENT_*` · `SENDGRID_*` | giá trị ở SSM `/badminton/<env>/*` | **Secret (ExternalSecret)** |
 
 Prod: thay `staging`→`prod`, `data-staging`→`data-prod`.
+
+> 📌 **Day 7 — `/actuator/prometheus` cần CẢ HAI repo, thiếu nửa nào cũng ra cùng một triệu chứng (target DOWN).**
+>
+> | Repo | Phần việc | Thiếu thì |
+> |---|---|---|
+> | `badmintonHub` | `micrometer-registry-prometheus` (parent `pom.xml`, scope runtime) | endpoint **không tồn tại** → 404 |
+> | `badmintonHub` | `"/actuator/prometheus"` trong `permitAll` của 6 `SecurityConfig` | **403** — các matcher đó là path LITERAL, không phải prefix |
+> | repo này | `MANAGEMENT_ENDPOINTS_WEB_EXPOSURE_INCLUDE` (ConfigMap) | endpoint không được phơi → 404 |
+> | repo này | `metrics.enabled: true` → label `badminton.io/metrics` (`charts/service`) | ServiceMonitor không chọn được → **target biến mất, không lỗi** |
+>
+> `frontend` cố ý **không** có cả 4: nginx không có actuator, scrape nó chỉ tạo một target đỏ vĩnh viễn.
 
 ### Biến có thật nhưng từng thiếu ở bảng này
 

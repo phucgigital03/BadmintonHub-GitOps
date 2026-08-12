@@ -138,7 +138,7 @@ docker buildx version  # BẮT BUỘC
 
 ---
 
-## §3 — 20 SSM parameter (10 tên × 2 env, + 3 tên CỐ TÌNH không tạo)
+## §3 — 21 SSM parameter (10 tên × 2 env + 1 của observability, + 3 tên CỐ TÌNH không tạo)
 
 Đường dẫn: **`/badminton/<env>/<TÊN>`**, `env ∈ {staging, prod}`, type **`SecureString`**, tier **Standard** (free).
 
@@ -176,6 +176,26 @@ Vì sao SSM chứ không phải SealedSecrets: param **sống ngoài cụm** →
 **Nạp (3):** `CLOUDINARY_CLOUD_NAME` · `CLOUDINARY_API_KEY` · `CLOUDINARY_API_SECRET` — bắt buộc, thiếu là `payment-service`/`chat-service` fail boot ở profile `prod`.
 
 **KHÔNG nạp (3):** `SENDGRID_API_KEY` · `GOOGLE_CLIENT_ID` · `GOOGLE_CLIENT_SECRET` — chưa có giá trị thật, mà SSM từ chối giá trị rỗng. Chart bơm sẵn key rỗng vào Secret. Có giá trị thật rồi thì nạp param **và** xoá tên khỏi `externalSecret.optionalKeys` (`charts/platform/values.yaml`).
+
+### 3b-bis. Param của observability (Day 7) — **1 cái, KHÔNG theo env**
+
+```bash
+aws ssm put-parameter --type SecureString --overwrite --region ap-southeast-1 \
+  --name /badminton/observability/TELEGRAM_BOT_TOKEN --value '<token của bot Telegram>'
+```
+
+Lấy lại token từ GitHub Secrets `TELEGRAM_BOT_TOKEN` đã tạo ở Day 5 — **dùng chung một bot** cho cả
+thông báo CI lẫn alert Alertmanager, không cần bot thứ hai.
+
+Không tách theo env vì `observability` là **một** bản duy nhất cho cả cụm (Prometheus scrape cả
+`staging` lẫn `prod` rồi phân biệt bằng label `namespace`).
+
+> **`TELEGRAM_CHAT_ID` cố ý KHÔNG ở SSM.** Alertmanager có `bot_token_file` nhưng **không có**
+> `chat_id_file`, nên chat_id nằm literal trong `observability/values.yaml`. Một chat_id không kèm
+> token thì không gửi được gì cũng không đọc được gì — inert; và repo này vốn đã chứa account ID AWS
+> trong 27 file values. Nạp nó vào SSM chỉ tạo ra một param không ai đọc.
+>
+> 🔴 IRSA của ESO đã cấp trên `parameter/badminton/*` từ Day 3 ⇒ **không phải sửa policy**.
 
 ### 3c. Nạp — chọn một trong hai đường
 
@@ -303,6 +323,26 @@ kubectl get applications -n argocd -l env=staging                # 11 (cả môi
 kubectl get applications -n argocd -l env=staging,tier=service  # 9  (chỉ service)
 argocd app list                                     # 20 app (18 child + infra + ingress), Synced/Healthy
 ```
+
+### Day 7 — Observability *(repo này)*
+
+Không có gì để xem trên AWS Console — **cố ý**. Prometheus/Grafana/Alertmanager đều chạy trong cụm
+với `emptyDir`, nên Day 7 **không tạo thêm một tài nguyên AWS nào**: 0 EBS, 0 ALB, 0 param mới ngoài
+1 cái token. Teardown §5 không đổi một dòng.
+
+| Kiểm | Ở đâu | Phải thấy |
+|---|---|---|
+| Param token | **Systems Manager → Parameter Store** | 1 dòng `/badminton/observability/TELEGRAM_BOT_TOKEN`, Type **SecureString** |
+| **KHÔNG có gì mới** | **EC2 → Volumes** · **EC2 → Load Balancers** | Vẫn đúng 8 EBS (của 5 datastore ×2 env) và 1 ALB — thêm nữa nghĩa là ai đó bật `persistence` hoặc `ingress` trong `observability/values.yaml` |
+
+```bash
+kubectl get applications -n argocd                  # 24 (23 cũ + observability), Synced/Healthy
+kubectl -n observability get pods                   # prometheus/alertmanager/grafana/operator/kube-state-metrics + node-exporter ×2
+kubectl get pvc -A                                  # vẫn 8 — observability KHÔNG được thêm cái nào
+```
+
+Nghiệm thu đường đo (endpoint 200 · target UP · tên metric · DLT→Telegram · rollout không 5xx):
+[`REBUILD-RUNBOOK.md`](REBUILD-RUNBOOK.md) → *Bước 6 → Nghiệm thu observability*.
 
 ### Day 8 — Domain + HTTPS
 
