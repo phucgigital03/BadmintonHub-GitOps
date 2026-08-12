@@ -1,0 +1,26 @@
+apiVersion: v2
+name: observability
+description: kube-prometheus-stack + ServiceMonitor/PrometheusRule của BadmintonHub (namespace observability)
+type: application
+version: 0.1.0
+
+# ⚠️ VERSION GHIM CÓ CHỦ ĐÍCH — cùng kỷ luật với infra/Chart.yaml và với 2 chart ghim trong
+# scripts/bootstrap.sh của repo app (aws-load-balancer-controller 3.5.0 · external-secrets 2.8.0).
+#
+# Để trống version nghĩa là "bản mới nhất lúc repo-server tải". Trong mô hình dựng-lại-mỗi-buổi
+# này thì đó là lỗi tệ nhất có thể: cụm hôm nay và cụm tuần sau khác nhau mà KHÔNG ai sửa một
+# dòng code nào — rồi một buổi nào đó alert im lặng và không ai nghĩ tới version chart.
+#
+# Đã verify cho 88.3.0 (helm show values, tra theo đúng đường dẫn key, không suy đoán):
+#   · appVersion v0.93.0 (prometheus-operator) · alertmanager v0.33.1 → CÓ `bot_token_file`
+#     (thêm từ Alertmanager 0.26 — thiếu nó thì bot token buộc phải nằm trong Git)
+#   · 4 công tắc control-plane tồn tại: kubeScheduler/kubeControllerManager/kubeEtcd/kubeProxy
+#   · prometheus.prometheusSpec.{serviceMonitor,rule,podMonitor}SelectorNilUsesHelmValues tồn tại
+#     — đây là 3 key mà đặt sai tên thì Helm bỏ qua TRONG IM LẶNG và ServiceMonitor không bao giờ
+#     được nhặt (đúng bài học `sasl.enabled` của Bitnami ở Day 6).
+#
+# Nâng version thì phải tra lại đúng 3 nhóm key trên rồi mới đổi số ở đây.
+dependencies:
+  - name: kube-prometheus-stack
+    version: 88.3.0
+    repository: https://prometheus-community.github.io/helm-charts

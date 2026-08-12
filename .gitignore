@@ -10,6 +10,7 @@
 # `helm dependency build` (bản đã khoá) thay vì `update` (tự nâng version).
 charts/*/charts/
 infra/charts/
+observability/charts/
 *.tgz
 
 .DS_Store

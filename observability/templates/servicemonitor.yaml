@@ -1,0 +1,43 @@
+# MỘT ServiceMonitor cho cả 16 target (8 service Java × 2 env) — không phải 16 file.
+#
+# Cơ chế: Prometheus Operator đọc CR này rồi SINH RA scrape config. Nó chọn Service theo label,
+# rồi scrape từng Endpoint (pod) đứng sau Service đó. Thêm service mới chỉ cần label — 0 dòng ở đây.
+#
+# 🔴 Vì sao file này nằm trong chart observability/ chứ không phải charts/platform:
+# ServiceMonitor là CRD do chính kube-prometheus-stack cài. Đặt ở charts/platform thì 2 app
+# platform-{staging,prod} sẽ render một object mà CRD chưa tồn tại lúc ArgoCD so sánh lần đầu
+# → cả hai app đứng ComparisonError "unable to recognize ... no matches for kind ServiceMonitor",
+# và nó KHÔNG tự khỏi vì ArgoCD cache kết quả so sánh. Cùng chart với CRD thì không có cửa đó.
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: badminton-services
+  labels:
+    app.kubernetes.io/name: observability
+    app.kubernetes.io/managed-by: {{ .Release.Service }}
+spec:
+  # Label do charts/service gắn khi metrics.enabled=true. frontend tắt (nginx, không có actuator).
+  selector:
+    matchLabels:
+      badminton.io/metrics: enabled
+
+  # ServiceMonitor sống ở ns observability nhưng chọn Service ở ns khác. Chạy được vì
+  # ClusterRole mặc định của Prometheus đã có get/list/watch services+endpoints ở phạm vi cụm.
+  namespaceSelector:
+    matchNames:
+      {{- range .Values.serviceMonitor.namespaces }}
+      - {{ . | quote }}
+      {{- end }}
+
+  endpoints:
+    # 🔴 `port` là TÊN port trong Service (charts/service/templates/service.yaml đặt `name: http`),
+    # KHÔNG phải số. Ghi số vào đây thì Operator không khớp được và target biến mất — không lỗi.
+    # Nhờ dùng tên mà một ServiceMonitor phủ được 8 service đang nghe 8 cổng khác nhau
+    # (3001…3011, 8761, 3000).
+    - port: http
+      path: /actuator/prometheus
+      interval: {{ .Values.serviceMonitor.interval }}
+      # Nhỏ hơn interval. JVM dưới sức ép có thể trả /actuator/prometheus chậm; quá hạn bị tính
+      # y như scrape fail — đúng cái bẫy probeTimeoutSeconds ở charts/service đã ghi lại.
+      scrapeTimeout: {{ .Values.serviceMonitor.scrapeTimeout }}
+      scheme: http

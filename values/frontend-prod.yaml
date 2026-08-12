@@ -55,3 +55,8 @@ resources:
 # nginx tĩnh, không có envFrom.configMap nên cũng không đọc được DATASTORE_WAIT.
 # Bật ở đây sẽ làm chart `required` báo lỗi lúc render — cố ý để lỗi ồn ào thay vì im lặng.
 waitForDatastores: false
+
+# Day 7 — KHÔNG scrape frontend. nginx không có /actuator/prometheus, bật lên là một target
+# DOWN vĩnh viễn trên bảng Prometheus. Đúng chỗ đã có tiền lệ waitForDatastores: false ngay trên.
+metrics:
+  enabled: false

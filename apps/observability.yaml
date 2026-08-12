@@ -1,0 +1,72 @@
+# kube-prometheus-stack + ServiceMonitor/PrometheusRule của BadmintonHub → namespace observability.
+#
+# MỘT bản cho cả cụm (không tách staging/prod như infra/platform): Prometheus scrape cả hai
+# namespace rồi phân biệt bằng label `namespace`. Dựng 2 bản là nhân đôi ~2 GiB RAM để lấy về
+# đúng cùng một dữ liệu.
+#
+# Chart `observability/` là umbrella có dependency trỏ prometheus-community. ArgoCD repo-server
+# tự chạy `helm dependency build` theo observability/Chart.lock (đã commit) — vì thế .gitignore
+# loại *.tgz mà vẫn deploy được, y như infra/.
+# ⚠️ Báo ComparisonError kiểu "found in Chart.yaml, but missing in charts/ directory" nghĩa là
+#    repo-server không ra được prometheus-community. Xử y hệt infra/: bỏ observability/charts/
+#    khỏi .gitignore và commit file .tgz.
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: observability
+  namespace: argocd
+  labels:
+    tier: observability
+  annotations:
+    # Wave 4 = sau ApplicationSet (wave 3). Ghi lại CHỦ Ý "dựng sau cùng", không phải hàng rào —
+    # Day 6 đã đo: một Application chưa quản lý resource nào thì được chấm Healthy ngay, nên cổng
+    # wave mở trong ~3 giây. Chủ ý ở đây là tài nguyên: lúc rebuild nguội, 18 JVM đang giành CPU
+    # và Prometheus là thứ đợi được lâu nhất.
+    argocd.argoproj.io/sync-wave: "4"
+  finalizers:
+    # Thiếu finalizer thì `--cascade` xoá Application nhưng BỎ LẠI object thật trên cụm.
+    # Với app này hậu quả nhẹ hơn Ingress (không sinh ALB), nhưng CRD cluster-scoped bỏ lại sẽ
+    # làm lần dựng sau ArgoCD thấy resource "lạ" không thuộc app nào.
+    - resources-finalizer.argocd.argoproj.io
+spec:
+  project: default
+
+  # Single-source được: observability/values.yaml NẰM TRONG source.path. (platform thì không —
+  # chart ở charts/platform còn values ở infra/values/ → buộc phải multi-source.)
+  source:
+    repoURL: https://github.com/phucgigital03/BadmintonHub-GitOps
+    targetRevision: main
+    path: observability
+
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: observability
+
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      # Cụm vừa `terraform apply` CHƯA có ns observability.
+      - CreateNamespace=true
+
+      # 🔴 BẮT BUỘC, không phải tối ưu. CRD prometheuses.monitoring.coreos.com có schema rất lớn;
+      # client-side apply nhét toàn bộ manifest vào annotation
+      # `kubectl.kubernetes.io/last-applied-configuration`, mà annotation bị giới hạn 262144 byte
+      # ⇒ sync chết với `metadata.annotations: Too long: must have at most 262144 bytes` và app
+      # đứng ở đó vĩnh viễn. Đây là lỗi phổ biến nhất của ArgoCD + kube-prometheus-stack.
+      # Server-side apply ghi ownership vào metadata.managedFields thay vì annotation → hết.
+      #
+      # (Cùng họ với `kubectl apply --server-side` bắt buộc cho apps/root.yaml ở Day 6, nhưng
+      #  lý do khác: root là để tránh OutOfSync giả, ở đây là để không vượt giới hạn kích thước.)
+      - ServerSideApply=true
+
+    retry:
+      # CRD cần vài giây để `Established` trước khi ServiceMonitor/PrometheusRule apply được.
+      # Lần sync đầu thường fail một nhịp rồi tự qua — retry là thứ biến nó thành chuyện không ai
+      # phải biết, thay vì một app đỏ phải bấm sync tay.
+      limit: 5
+      backoff:
+        duration: 20s
+        factor: 2
+        maxDuration: 5m

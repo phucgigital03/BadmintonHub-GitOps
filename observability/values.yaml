@@ -1,0 +1,166 @@
+# observability — 1 bản duy nhất cho cả cụm (KHÔNG tách theo env như infra/platform).
+#
+# Prometheus/Grafana/Alertmanager là hạ tầng quan sát của CỤM, không phải của một môi trường:
+# một Prometheus scrape cả staging lẫn prod rồi phân biệt bằng label `namespace`. Dựng 2 bản là
+# nhân đôi ~2 GiB RAM để lấy về đúng cùng một dữ liệu.
+#
+# 💰 Posture ephemeral: KHÔNG persistence ở bất kỳ đâu (Prometheus + Grafana + Alertmanager đều
+# emptyDir) ⇒ 0 EBS mới ⇒ teardown 5 bước §9.2 của Day 4 KHÔNG đổi một dòng, và không có đường
+# nào sinh volume mồ côi tính tiền sau khi destroy. Cụm sống ~1.5h thì retention 6h là quá thừa.
+
+# ─────────────────────── Cấu hình riêng của BadmintonHub ───────────────────────
+# (dùng bởi templates/ trong chính chart này, KHÔNG phải value của kube-prometheus-stack)
+
+serviceMonitor:
+  # Namespace bị scrape.
+  #
+  # 🔴 CỐ Ý chỉ có `staging` ở bước đầu. values/*-prod.yaml còn ở tag TRƯỚC Day 7 — image đó
+  # không có micrometer nên /actuator/prometheus trả 404 ⇒ thêm `prod` vào đây bây giờ là
+  # 8 target DOWN vĩnh viễn + alert TargetDown kêu suốt buổi. Tự tay phá đúng tín hiệu vừa dựng.
+  #
+  # ➡️ Thêm `- prod` vào danh sách này TRONG CÙNG PR promote 8 file values/*-prod.yaml
+  #    (bước C7b). Hai thay đổi đó phải đi cùng nhau, tách ra là sinh ra khoảng thời gian
+  #    có 8 target đỏ mà không ai gây ra.
+  namespaces:
+    - staging
+  interval: 30s
+  scrapeTimeout: 10s
+
+externalSecret:
+  enabled: true
+  # ClusterSecretStore do scripts/bootstrap.sh của Day 3 cài. Tên `aws-ssm` là HỢP ĐỒNG —
+  # smoke-irsa.sh của repo app hardcode đúng tên này.
+  storeName: aws-ssm
+  apiVersion: external-secrets.io/v1
+  ssmPath: /badminton/observability/
+  targetName: alertmanager-telegram
+  refreshInterval: 1h
+
+# ─────────────────────── kube-prometheus-stack (subchart) ───────────────────────
+kube-prometheus-stack:
+
+  # ⓪ 🔴 TẮT ~100 rule mặc định của chart. Không phải vì chúng dở — vì chúng được viết cho cụm
+  #    production SỐNG LÂU, còn cụm này cố ý overcommit và chỉ sống ~1.5 giờ mỗi buổi:
+  #      · KubeCPUOvercommit / KubeMemoryOvercommit — 2 node t3.xlarge gánh 28 pod, gần như
+  #        CHẮC CHẮN firing, và đó là trạng thái BÌNH THƯỜNG ở posture này
+  #      · KubePodNotReady / KubeDeploymentReplicasMismatch — 18 JVM boot mất 2-3 phút mỗi lần
+  #        rebuild, tức mỗi buổi đều kêu một loạt rồi tự tắt
+  #    Hệ quả nếu để bật: mỗi lần dựng cụm là một tràng Telegram vì lý do không sửa được →
+  #    tắt notification → mất luôn alert DLT, đúng thứ Day 7 sinh ra để có. Đây là cùng một
+  #    nguyên tắc đã áp cho 4 cổng CI ở Day 5: đừng dựng cổng sẽ đỏ ngay ngày đầu vì nợ có sẵn.
+  #
+  #    Đổi lại, chart này tự khai 4 rule ở templates/prometheusrule.yaml — chỉ những thứ nói về
+  #    TIỀN và về chính đường scrape. Bật lại defaultRules là 1 dòng khi cụm thành always-on.
+  defaultRules:
+    create: false
+
+  # ① EKS: control plane là managed, AWS không phơi 4 thành phần này ra để scrape.
+  #    Không tắt ⇒ 4 target DOWN + alert TargetDown/KubeSchedulerDown kêu liên tục ngay từ phút
+  #    đầu ⇒ Telegram spam vì lý do không sửa được ⇒ tắt notification ⇒ mất luôn tín hiệu thật.
+  #    Đây đúng là nguyên tắc "đừng dựng cổng sẽ đỏ ngay ngày đầu vì nợ có sẵn" của Day 5.
+  kubeScheduler:
+    enabled: false
+  kubeControllerManager:
+    enabled: false
+  kubeEtcd:
+    enabled: false
+  kubeProxy:
+    enabled: false
+
+  prometheus:
+    prometheusSpec:
+      # ② 🔴 BẮT BUỘC. Mặc định `true` nghĩa là Prometheus CHỈ nhận ServiceMonitor/PrometheusRule
+      #    mang label `release: <tên release>` của chính nó. ServiceMonitor ở templates/ không có
+      #    label đó ⇒ bị LỜ ĐI TRONG IM LẶNG: CR tồn tại, kubectl get thấy, mà /targets rỗng và
+      #    không một dòng log nào giải thích. Đây là lỗi phổ biến nhất khi tự viết ServiceMonitor.
+      serviceMonitorSelectorNilUsesHelmValues: false
+      ruleSelectorNilUsesHelmValues: false
+      podMonitorSelectorNilUsesHelmValues: false
+
+      # ③ KHÔNG khai storageSpec ⇒ emptyDir. Xem ghi chú 💰 ở đầu file.
+      retention: 6h
+
+      resources:
+        requests:
+          memory: 512Mi
+          cpu: 100m
+        limits:
+          memory: 1536Mi
+
+  grafana:
+    # Xem qua `kubectl port-forward`. KHÔNG thêm Ingress: mỗi Ingress là một ALB nữa
+    # (~$16/tháng nếu quên xoá) và thêm một thứ phải nhớ trong teardown.
+    persistence:
+      enabled: false
+    # Mật khẩu mặc định của chart là `prom-operator`. Chấp nhận được vì Grafana KHÔNG ra
+    # khỏi cụm — chỉ tới được qua port-forward, tức đã phải có quyền kubectl.
+    resources:
+      requests:
+        memory: 128Mi
+        cpu: 50m
+      limits:
+        memory: 256Mi
+
+  alertmanager:
+    alertmanagerSpec:
+      # Prometheus Operator mount Secret này vào /etc/alertmanager/secrets/<tên-secret>/<key>.
+      # Secret do ExternalSecret ở templates/ tạo (sync-wave -1, có TRƯỚC pod).
+      secrets:
+        - alertmanager-telegram
+      resources:
+        requests:
+          memory: 64Mi
+          cpu: 25m
+        limits:
+          memory: 128Mi
+
+    # ⚠️ Helm MERGE map nhưng THAY THẾ list. `route` là map nên các key mặc định
+    # (group_by, group_interval, routes) VẪN CÒN sau khi merge — kể cả cái không viết ở đây.
+    # `receivers` là list nên bị thay hoàn toàn.
+    #
+    # 🔴 Hệ quả bắt buộc phải biết: route mặc định có `routes: [{receiver: 'null', matchers:
+    #    alertname="Watchdog"}]`. Nếu chỉ khai receiver `telegram` thì sau merge còn một route
+    #    trỏ tới receiver `null` KHÔNG CÒN TỒN TẠI → Alertmanager từ chối nạp config với
+    #    "undefined receiver". Vì thế receiver `null` bên dưới KHÔNG phải rác — nó bắt buộc.
+    config:
+      route:
+        receiver: telegram
+        # 10s thay vì 30s mặc định: một sự kiện DLT là tiền/slot đang kẹt im lặng, gom nhóm
+        # thêm 20 giây không đổi gì ngoài việc kéo dài lúc chưa ai biết.
+        group_wait: 10s
+        repeat_interval: 1h
+      receivers:
+        # Đích của sub-route Watchdog mặc định — xem cảnh báo 🔴 ngay trên. Sub-route đó vẫn nằm
+        # trong config sau khi merge (route là map), dù defaultRules đã tắt nên alert Watchdog
+        # không còn tồn tại để khớp. Bỏ receiver này đi = config có route trỏ tới receiver không
+        # tồn tại = Alertmanager từ chối nạp. Nó rẻ và bắt buộc, không phải rác.
+        - name: 'null'
+        - name: telegram
+          telegram_configs:
+            - api_url: https://api.telegram.org
+              # 🔴 `bot_token_file`, KHÔNG phải `bot_token`. Repo PUBLIC.
+              bot_token_file: /etc/alertmanager/secrets/alertmanager-telegram/TELEGRAM_BOT_TOKEN
+              #
+              # 🔴 ĐIỀN TRƯỚC KHI PUSH — số nguyên, lấy lại từ GitHub Secrets TELEGRAM_CHAT_ID
+              #    của Day 5. Đây là chỗ DUY NHẤT khai chat_id.
+              #
+              # Vì sao token nằm ngoài Git mà chat_id thì trong: Alertmanager có `bot_token_file`
+              # nhưng KHÔNG có `chat_id_file`. Một chat_id không kèm token thì không gửi được gì,
+              # cũng không đọc được gì — inert. Repo này vốn đã chứa account ID AWS trong 27 file
+              # values, nên đây không phải một loại phơi bày mới.
+              #
+              # ⚠️ Quên thay = Alertmanager từ chối config (chat_id phải là số) → pod không Ready
+              # → app `observability` Degraded. Hỏng ỒN ÀO, cố ý. Đừng đặt `0` cho "hết lỗi":
+              # lúc đó Alertmanager lên bình thường còn Telegram trả 400 "chat not found" ở
+              # background — alert im lặng không tới, đúng kiểu hỏng tệ nhất.
+              chat_id: REPLACE_WITH_TELEGRAM_CHAT_ID
+              send_resolved: true
+              # parse_mode rỗng = gửi text thô. Mặc định là HTML, mà annotation của alert có thể
+              # chứa `<`, `>`, `&` (ví dụ một PromQL expr) → Telegram trả 400 và alert KHÔNG tới,
+              # trong khi Alertmanager vẫn xanh. Bỏ parse_mode là bỏ luôn cả lớp lỗi đó.
+              parse_mode: ''
+              message: |-
+                {{ .Status | toUpper }} · {{ .CommonLabels.alertname }}
+                {{ range .Alerts }}{{ .Annotations.summary }}
+                {{ .Annotations.description }}
+                {{ end }}

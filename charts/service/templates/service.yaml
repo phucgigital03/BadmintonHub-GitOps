@@ -5,6 +5,12 @@ metadata:
   labels:
     {{- include "service.labels" . | nindent 4 }}
     {{- include "service.selectorLabels" . | nindent 4 }}
+    {{- if .Values.metrics.enabled }}
+    # Day 7 — ServiceMonitor của chart observability/ chọn Service theo đúng label này.
+    # ⚠️ Nằm ở metadata.labels, KHÔNG phải spec.selector: nó không đụng gì tới việc Service
+    # tìm pod. spec.selector là field immutable một phần và đã có tiền lệ hỏng ở Day 6.
+    badminton.io/metrics: enabled
+    {{- end }}
   {{- with .Values.service.annotations }}
   # Day 4: chỗ khai annotation cho AWS Load Balancer Controller. Controller đọc annotation
   # `alb.ingress.kubernetes.io/*` trên chính SERVICE để cấu hình RIÊNG target group của service

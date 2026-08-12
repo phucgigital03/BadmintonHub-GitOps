@@ -1,0 +1,97 @@
+# 4 alert — cố ý ÍT. defaultRules của chart đã tắt (xem values.yaml ⓪), nên đây là TOÀN BỘ
+# những thứ sẽ làm điện thoại rung. Mỗi cái phải trả lời được: "nếu im lặng thì mất gì?"
+#
+# 3 cái đầu nói về TIỀN — chúng đóng điều kiện go-live ③ còn nợ từ vòng audit money-safety
+# ("alert trên log ERROR [DLT] / limbo"). Chọn METRIC thay vì log rule của Loki vì counter tăng
+# trong ĐÚNG code path in ra dòng log đó (PaymentDeadLetterMonitor.java:46 v.v.) — cùng tín hiệu,
+# mà không phải dựng thêm Loki + ruler.
+#
+# ⚠️ Tên metric dưới đây đọc từ source repo app (Micrometer đổi `.`→`_`; counter đã kết thúc bằng
+# `.total` nên KHÔNG bị nối `_total` lần hai). Vẫn phải đối chiếu output THẬT của
+# /actuator/prometheus ở bước C4 trước khi tin — quy tắc của repo này là đừng suy luận cái đo được.
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: badminton-money-safety
+  labels:
+    app.kubernetes.io/name: observability
+    app.kubernetes.io/managed-by: {{ .Release.Service }}
+spec:
+  groups:
+    - name: badminton.money-safety
+      # 30s: nhanh bằng interval scrape. Đây là nhóm rule đắt nhất khi phát hiện muộn.
+      interval: 30s
+      rules:
+
+        # ─────────────────────────────────────────────────────────────────────────
+        # Một message đã hết 3 lần retry và rơi vào .DLT. Hệ quả thật, không phải lý thuyết:
+        # payment.player.confirmed chết = user ĐÃ trả tiền mà booking không bao giờ CONFIRMED;
+        # booking.refund.required chết = tiền cần hoàn không bao giờ vào hàng đợi STAFF;
+        # booking.slot.changed chết = ô sân kẹt RESERVED trên một đơn đã huỷ.
+        # Cả ba đều IM LẶNG với người dùng — không ai báo, và không có cách nào tự phát hiện.
+        #
+        # for: 0m — chỉ cần một message duy nhất là đủ để phải nhìn. Không gom, không chờ.
+        - alert: KafkaDeadLetter
+          expr: >-
+            increase(booking_payment_deadletter_total[5m]) > 0
+            or increase(payment_booking_deadletter_total[5m]) > 0
+            or increase(court_slot_deadletter_total[5m]) > 0
+          for: 0m
+          labels:
+            severity: critical
+            area: money
+          annotations:
+            summary: {{ `'[DLT] {{ $labels.job }} ({{ $labels.namespace }}) — message chết vào dead-letter topic'` }}
+            description: {{ `'{{ $value | printf "%.0f" }} message vào .DLT trong 5 phút qua. Tiền hoặc ô sân đang kẹt IM LẶNG — không có ai báo và hệ thống không tự khỏi. Đọc log ERROR có tiền tố [DLT] của pod để lấy payload rồi replay tay.'` }}
+
+        # ─────────────────────────────────────────────────────────────────────────
+        # Outbox PENDING quá lâu = Kafka không publish được. Bản ghi nghiệp vụ đã commit nhưng
+        # sự kiện chưa bao giờ rời service ⇒ consumer bên kia không biết gì.
+        # Publish khoẻ drain trong ~3s; scheduler cập nhật gauge mỗi 2 phút ⇒ for: 5m ≈ 2-3 lần
+        # đo liên tiếp, đủ để loại một nhịp Kafka nhấp nháy.
+        - alert: OutboxStuck
+          expr: booking_outbox_stuck > 0 or payment_outbox_stuck > 0
+          for: 5m
+          labels:
+            severity: critical
+            area: money
+          annotations:
+            summary: {{ `'[LIMBO] Outbox kẹt ở {{ $labels.job }} ({{ $labels.namespace }})'` }}
+            description: {{ `'{{ $value | printf "%.0f" }} sự kiện Outbox còn PENDING >2 phút. Kafka publish đang hỏng: ô sân có thể kẹt RESERVED và cờ cần-hoàn-tiền chưa tới payment-service.'` }}
+
+        # ─────────────────────────────────────────────────────────────────────────
+        # Khách đã chuyển khoản + nộp biên lai, nhưng STAFF chưa duyệt. Tiền đã rời tài khoản
+        # khách và đang nằm chờ người. 10m là SLA vận hành, không phải lỗi kỹ thuật — nên
+        # severity warning, và ngưỡng dài hơn để không kêu vì một lần STAFF đi pha cà phê.
+        - alert: PaymentProofStuck
+          expr: payment_proof_stuck > 0
+          for: 10m
+          labels:
+            severity: warning
+            area: money
+          annotations:
+            summary: {{ `'[LIMBO] {{ $value | printf "%.0f" }} biên lai chờ STAFF duyệt ({{ $labels.namespace }})'` }}
+            description: {{ `'Payment ở PROOF_SUBMITTED quá SLA. Tiền khách đã chuyển và đang chờ người xác nhận — mở GET /api/payments/pending-review.'` }}
+
+    - name: badminton.scrape
+      interval: 30s
+      rules:
+        # ─────────────────────────────────────────────────────────────────────────
+        # Không có rule này thì 3 alert trên có một điểm mù chết người: một service NGỪNG được
+        # scrape thì mọi expr của nó không trả về gì, và "không có dữ liệu" trông y hệt "không
+        # có vấn đề". Đây là alert canh chính cái đường đo.
+        #
+        # for: 10m — dài có chủ đích. Mỗi lần rebuild nguội, 8 JVM mất 2-3 phút mới Ready; ngưỡng
+        # ngắn sẽ biến việc dựng cụm bình thường thành một tràng thông báo.
+        # Phủ cả 8 target service lẫn target của chính stack (kubelet, apiserver, coredns,
+        # node-exporter, kube-state-metrics…) — nếu một trong số đó chết 10 phút thì đúng là
+        # nên biết, và tự Prometheus mù thì mọi thứ khác cũng mù theo.
+        - alert: BadmintonTargetDown
+          expr: up == 0
+          for: 10m
+          labels:
+            severity: warning
+            area: observability
+          annotations:
+            summary: {{ `'Prometheus mất dấu {{ $labels.job }} ({{ $labels.namespace }}) >10 phút'` }}
+            description: {{ `'Target không scrape được. Mọi alert money-safety của service này giờ MÙ — không có dữ liệu trông giống hệt không có vấn đề. Kiểm: pod còn sống không, /actuator/prometheus còn 200 không (403 = mất "/actuator/prometheus" trong permitAll của SecurityConfig).'` }}

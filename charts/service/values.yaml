@@ -113,6 +113,23 @@ resources:
   limits:
     memory: 448Mi
 
+# ─────────────────────────────── Metrics (Day 7) ───────────────────────────────
+# Gắn label `badminton.io/metrics: enabled` lên Service. ServiceMonitor của chart observability/
+# chọn theo đúng label này, nên đây là CÔNG TẮC quyết định service có bị Prometheus scrape không.
+#
+# default true vì 8/9 service là Spring Boot và đều có /actuator/prometheus (từ Day 7).
+#
+# 🔴 Đặt false cho frontend. Nó là nginx — không có actuator, scrape sẽ ra một target DOWN
+# VĨNH VIỄN. Không hỏng gì về vận hành, nhưng hỏng thứ đắt hơn: một bảng target lúc nào cũng có
+# màu đỏ thì vài tuần sau không ai còn nhìn nó nữa, và lúc đó target đỏ THẬT cũng chìm luôn.
+# Cùng lý do với việc tắt 4 target control-plane của EKS trong observability/values.yaml.
+#
+# Chọn bằng LABEL chứ không bằng annotation `prometheus.io/scrape` vì Prometheus Operator làm
+# việc qua ServiceMonitor + label selector; annotation kiểu cũ chỉ có tác dụng với Prometheus
+# cấu hình tay, ở đây sẽ bị bỏ qua TRONG IM LẶNG.
+metrics:
+  enabled: true
+
 service:
   type: ClusterIP
 
