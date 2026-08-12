@@ -70,6 +70,35 @@ data:
   # và pod không bao giờ Ready. 0 dòng code, 0 dòng pom.
   MANAGEMENT_ENDPOINT_HEALTH_PROBES_ENABLED: "true"
 
+  # ---- Metrics (Day 7) ----
+  # Mở /actuator/prometheus cho kube-prometheus-stack scrape. Cùng cách đã dùng cho biến probe
+  # ngay trên: application.yml của 8 service ship `health,info`, biến env này đè lên — 0 dòng
+  # code, 0 dòng pom ở repo app.
+  #
+  # Hai nửa của cơ chế nằm ở HAI repo, thiếu nửa nào cũng hỏng và triệu chứng giống hệt nhau
+  # (target DOWN), nên ghi rõ ở đây:
+  #   repo app  — micrometer-registry-prometheus trên classpath (endpoint mới TỒN TẠI)
+  #             + "/actuator/prometheus" trong permitAll của 6 SecurityConfig. Các matcher đó là
+  #               path LITERAL, không phải prefix, nên trước Day 7 endpoint này trả 403.
+  #   repo này  — dòng dưới (endpoint được PHƠI ra).
+  #
+  # An toàn với image CŨ: `values/*-prod.yaml` còn ở tag trước Day 7, image đó không có
+  # micrometer nên Spring đơn giản là không có endpoint để phơi — health/info không đổi hành vi.
+  # Biến thừa, không phải biến hỏng.
+  MANAGEMENT_ENDPOINTS_WEB_EXPOSURE_INCLUDE: "health,info,prometheus"
+
+  # ---- Graceful shutdown (Day 7) ----
+  # Nửa Kubernetes đã có từ Day 6 trong charts/service: preStop `sleep 15` +
+  # terminationGracePeriodSeconds 45. Nửa Spring là 2 dòng dưới đây — thiếu nó thì SIGTERM giết
+  # JVM ngay lập tức và request đang dở bị cắt giữa chừng thành 502 ở ALB.
+  #
+  # Ngân sách 45s chia ra: 15 (preStop — pod đã bị rút khỏi Endpoints, chờ kube-proxy/ALB và
+  # Eureka hội tụ) + 20 (drain request đang dở) + 10 dư. Đổi số nào cũng phải soát lại
+  # terminationGracePeriodSeconds ở charts/service/templates/deployment.yaml: nếu tổng vượt 45
+  # thì kubelet gửi SIGKILL trước khi Spring drain xong, tức mất đúng thứ vừa bật.
+  SERVER_SHUTDOWN: "graceful"
+  SPRING_LIFECYCLE_TIMEOUT_PER_SHUTDOWN_PHASE: "20s"
+
   # ---- Knob nghiệp vụ ----
   # PAYMENT_EXPIRE_MINUTES bị ép bằng đúng BOOKING_HOLD_MINUTES: hai service comment rõ là
   # hold window và payment window phải hết hạn cùng lúc.
