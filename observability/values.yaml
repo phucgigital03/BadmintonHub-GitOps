@@ -153,7 +153,7 @@ kube-prometheus-stack:
               # → app `observability` Degraded. Hỏng ỒN ÀO, cố ý. Đừng đặt `0` cho "hết lỗi":
               # lúc đó Alertmanager lên bình thường còn Telegram trả 400 "chat not found" ở
               # background — alert im lặng không tới, đúng kiểu hỏng tệ nhất.
-              chat_id: REPLACE_WITH_TELEGRAM_CHAT_ID
+              chat_id: 7602558084
               send_resolved: true
               # parse_mode rỗng = gửi text thô. Mặc định là HTML, mà annotation của alert có thể
               # chứa `<`, `>`, `&` (ví dụ một PromQL expr) → Telegram trả 400 và alert KHÔNG tới,
