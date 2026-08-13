@@ -92,8 +92,20 @@ kube-prometheus-stack:
     # (~$16/tháng nếu quên xoá) và thêm một thứ phải nhớ trong teardown.
     persistence:
       enabled: false
-    # Mật khẩu mặc định của chart là `prom-operator`. Chấp nhận được vì Grafana KHÔNG ra
-    # khỏi cụm — chỉ tới được qua port-forward, tức đã phải có quyền kubectl.
+    # 🔴 KHÔNG để trống admin — chart 88.3.0 KHÔNG còn mặc định `prom-operator` như bản cũ.
+    # Bỏ trống thì template Grafana rơi vào `randAlphaNum 40` ⇒ MỖI LẦN ArgoCD render ra một
+    # mật khẩu khác ⇒ Secret luôn lệch ⇒ annotation `checksum/secret` của Deployment đổi theo
+    # ⇒ app OutOfSync vĩnh viễn và `selfHeal` roll lại pod Grafana mỗi vòng reconcile (~3').
+    # Triệu chứng dễ đọc nhầm thành "Grafana không ổn định".
+    #
+    # Giá trị nằm ở SSM `/badminton/observability/` — cùng path với TELEGRAM_BOT_TOKEN, nên
+    # ExternalSecret sẵn có (dataFrom.find regexp `.*`) tự kéo về làm key, KHÔNG cần thêm
+    # ExternalSecret nào. Mật khẩu do đó không bao giờ nằm trong Git (repo này PUBLIC) và
+    # sống ngoài cụm nên `terraform destroy` không xoá.
+    admin:
+      existingSecret: alertmanager-telegram
+      userKey: GRAFANA_ADMIN_USER
+      passwordKey: GRAFANA_ADMIN_PASSWORD
     resources:
       requests:
         memory: 128Mi
