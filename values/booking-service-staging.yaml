@@ -16,7 +16,7 @@ image:
   # (setAllowedOriginPatterns) + FE same-origin. Bất biến, KHÔNG bao giờ dùng `latest`:
   # tag cố định mới truy được cụm đang chạy code nào và rollback mới có nghĩa.
   # Day 5: CI tự bump dòng này khi merge main. Promote prod = PR đổi sang SHA đã verify ở staging.
-  tag: 74092fb
+  tag: 2800abf
   pullPolicy: IfNotPresent
 
 strategy: RollingUpdate
